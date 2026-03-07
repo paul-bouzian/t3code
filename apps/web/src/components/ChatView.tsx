@@ -193,6 +193,7 @@ import {
   projectScriptRuntimeEnv,
   projectScriptIdFromCommand,
   setupProjectScript,
+  upsertProjectScript,
 } from "~/projectScripts";
 import { Toggle } from "./ui/toggle";
 import { SidebarTrigger } from "./ui/sidebar";
@@ -1555,15 +1556,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
         command: input.command,
         icon: input.icon,
         runOnWorktreeCreate: input.runOnWorktreeCreate,
+        runOnWorktreeDelete: input.runOnWorktreeDelete,
       };
-      const nextScripts = input.runOnWorktreeCreate
-        ? [
-            ...activeProject.scripts.map((script) =>
-              script.runOnWorktreeCreate ? { ...script, runOnWorktreeCreate: false } : script,
-            ),
-            nextScript,
-          ]
-        : [...activeProject.scripts, nextScript];
+      const nextScripts = upsertProjectScript(activeProject.scripts, nextScript);
 
       await persistProjectScripts({
         projectId: activeProject.id,
@@ -1590,14 +1585,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
         command: input.command,
         icon: input.icon,
         runOnWorktreeCreate: input.runOnWorktreeCreate,
+        runOnWorktreeDelete: input.runOnWorktreeDelete,
       };
-      const nextScripts = activeProject.scripts.map((script) =>
-        script.id === scriptId
-          ? updatedScript
-          : input.runOnWorktreeCreate
-            ? { ...script, runOnWorktreeCreate: false }
-            : script,
-      );
+      const nextScripts = upsertProjectScript(activeProject.scripts, updatedScript);
 
       await persistProjectScripts({
         projectId: activeProject.id,
