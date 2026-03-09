@@ -28,6 +28,18 @@ describe("parseCodexCustomPromptFrontmatter", () => {
       argumentHint: "[file]",
     });
   });
+
+  it("preserves CRLF line endings while stripping frontmatter", () => {
+    expect(
+      parseCodexCustomPromptFrontmatter(
+        "---\r\ndescription: \"Quick review\"\r\nargument-hint: \"[file]\"\r\n---\r\nBody",
+      ),
+    ).toEqual({
+      content: "Body",
+      description: "Quick review",
+      argumentHint: "[file]",
+    });
+  });
 });
 
 describe("expandCodexCustomPromptInvocation", () => {
@@ -45,6 +57,13 @@ describe("expandCodexCustomPromptInvocation", () => {
       content: "Review $FILE for $PRIORITY",
       description: "Review a file",
       argumentHint: "[file] [priority]",
+    },
+    {
+      name: "price",
+      path: "/tmp/price.md",
+      content: "Price: $$$AMOUNT",
+      description: "Render a price",
+      argumentHint: "[amount]",
     },
   ] as const;
 
@@ -95,6 +114,17 @@ describe("expandCodexCustomPromptInvocation", () => {
     ).toEqual({
       message:
         "Missing required args for /prompts:review: PRIORITY. Provide as key=value (quote values with spaces).",
+    });
+  });
+
+  it("keeps escaped dollars before named arguments", () => {
+    expect(
+      expandCodexCustomPromptInvocation({
+        text: "/prompts:price AMOUNT=100",
+        prompts,
+      }),
+    ).toEqual({
+      text: "Price: $$100",
     });
   });
 });

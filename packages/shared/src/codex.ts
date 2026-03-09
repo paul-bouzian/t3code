@@ -33,8 +33,27 @@ const NAMED_PROMPT_ARGUMENT_PATTERN = /\$[A-Z][A-Z0-9_]*/g;
 const SKILL_TOKEN_PATTERN = /(^|\s)\$(|[A-Za-z][A-Za-z0-9._-]*)$/;
 const SKILL_TOKEN_GLOBAL_PATTERN = /(^|\s)\$([A-Za-z][A-Za-z0-9._-]*)(?=\s|$)/g;
 
+function splitContentLines(content: string): string[] {
+  const segments: string[] = [];
+  let lineStart = 0;
+
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index] !== "\n") {
+      continue;
+    }
+    segments.push(content.slice(lineStart, index + 1));
+    lineStart = index + 1;
+  }
+
+  if (lineStart < content.length) {
+    segments.push(content.slice(lineStart));
+  }
+
+  return segments;
+}
+
 export function parseCodexCustomPromptFrontmatter(content: string): CodexCustomPromptFrontmatter {
-  const segments = content.split(/(?<=\n)/);
+  const segments = splitContentLines(content);
   const firstSegment = segments[0];
   if (!firstSegment || firstSegment.replace(/[\r\n]+$/g, "").trim() !== "---") {
     return {
@@ -174,7 +193,7 @@ function collectNamedPromptArguments(template: string): string[] {
   for (const match of template.matchAll(NAMED_PROMPT_ARGUMENT_PATTERN)) {
     const placeholder = match[0];
     const start = match.index ?? 0;
-    if (start > 0 && template[start - 1] === "$") {
+    if (start > 0 && template[start - 1] === "$" && template[start - 2] !== "$") {
       continue;
     }
     const name = placeholder.slice(1);
