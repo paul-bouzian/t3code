@@ -23,8 +23,9 @@ import {
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, PubSub, Queue, Schema, SchemaIssue, Stream } from "effect";
 
-import { ProviderValidationError } from "../Errors.ts";
+import { ProviderValidationError, type ProviderServiceError } from "../Errors.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
+import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
   ProviderSessionDirectory,
@@ -291,9 +292,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           );
         }
 
-        yield* upsertSessionBinding(session, threadId, {
-          ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
-        });
+        yield* upsertSessionBinding(
+          session,
+          threadId,
+          input.providerOptions !== undefined
+            ? { providerOptions: input.providerOptions }
+            : undefined,
+        );
         yield* analytics.record("provider.session.started", {
           provider: session.provider,
           runtimeMode: input.runtimeMode,
@@ -473,6 +478,24 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const getCapabilities: ProviderServiceShape["getCapabilities"] = (provider) =>
       registry.getByProvider(provider).pipe(Effect.map((adapter) => adapter.capabilities));
 
+    const listCodexCustomPrompts: ProviderServiceShape["listCodexCustomPrompts"] = (input) =>
+      Effect.gen(function* () {
+        const adapter = (yield* registry.getByProvider("codex")) as CodexAdapterShape;
+        return yield* adapter.listCustomPrompts(
+          input?.providerOptions ? { providerOptions: input.providerOptions } : undefined,
+        );
+      }).pipe(Effect.mapError((error): ProviderServiceError => error));
+
+    const listCodexSkills: ProviderServiceShape["listCodexSkills"] = (input) =>
+      Effect.gen(function* () {
+        const adapter = (yield* registry.getByProvider("codex")) as CodexAdapterShape;
+        return yield* adapter.listSkills({
+          cwd: input.cwd,
+          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+          ...(input.forceReload !== undefined ? { forceReload: input.forceReload } : {}),
+        });
+      }).pipe(Effect.mapError((error): ProviderServiceError => error));
+
     const rollbackConversation: ProviderServiceShape["rollbackConversation"] = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
@@ -536,6 +559,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       stopSession,
       listSessions,
       getCapabilities,
+      listCodexCustomPrompts,
+      listCodexSkills,
       rollbackConversation,
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     } satisfies ProviderServiceShape;

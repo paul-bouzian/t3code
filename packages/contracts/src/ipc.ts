@@ -15,6 +15,11 @@ import type {
   GitStatusResult,
 } from "./git";
 import type {
+  CodexCatalogProviderOptions,
+  CodexListCustomPromptsResult,
+  CodexListSkillsResult,
+} from "./codex";
+import type {
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
@@ -148,6 +153,16 @@ export interface NativeApi {
   server: {
     getConfig: () => Promise<ServerConfig>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+  };
+  codex: {
+    listCustomPrompts: (input?: {
+      providerOptions?: CodexCatalogProviderOptions;
+    }) => Promise<CodexListCustomPromptsResult>;
+    listSkills: (input: {
+      cwd: string;
+      providerOptions?: CodexCatalogProviderOptions;
+      forceReload?: boolean;
+    }) => Promise<CodexListSkillsResult>;
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;

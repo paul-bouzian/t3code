@@ -1,4 +1,5 @@
 import { Option, Schema, SchemaIssue, Struct } from "effect";
+import { CODEX_MAX_SKILL_SELECTIONS, CodexSkillSelection } from "./codex";
 import { ProviderModelOptions } from "./model";
 import {
   ApprovalRequestId,
@@ -367,6 +368,9 @@ export const ThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
   }),
+  skillSelections: Schema.optional(
+    Schema.Array(CodexSkillSelection).check(Schema.isMaxLength(CODEX_MAX_SKILL_SELECTIONS)),
+  ),
   provider: Schema.optional(ProviderKind),
   model: Schema.optional(TrimmedNonEmptyString),
   modelOptions: Schema.optional(ProviderModelOptions),
@@ -389,6 +393,9 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment),
   }),
+  skillSelections: Schema.optional(
+    Schema.Array(CodexSkillSelection).check(Schema.isMaxLength(CODEX_MAX_SKILL_SELECTIONS)),
+  ),
   provider: Schema.optional(ProviderKind),
   model: Schema.optional(TrimmedNonEmptyString),
   modelOptions: Schema.optional(ProviderModelOptions),
@@ -669,6 +676,9 @@ export const ThreadMessageSentPayload = Schema.Struct({
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  skillSelections: Schema.optional(
+    Schema.Array(CodexSkillSelection).check(Schema.isMaxLength(CODEX_MAX_SKILL_SELECTIONS)),
+  ),
   provider: Schema.optional(ProviderKind),
   model: Schema.optional(TrimmedNonEmptyString),
   modelOptions: Schema.optional(ProviderModelOptions),

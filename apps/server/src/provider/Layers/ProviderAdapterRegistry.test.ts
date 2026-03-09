@@ -19,6 +19,8 @@ const fakeCodexAdapter: CodexAdapterShape = {
   respondToRequest: vi.fn(),
   respondToUserInput: vi.fn(),
   stopSession: vi.fn(),
+  listCustomPrompts: vi.fn(() => Effect.succeed({ prompts: [] })),
+  listSkills: vi.fn(() => Effect.succeed({ skills: [], errors: [] })),
   listSessions: vi.fn(),
   hasSession: vi.fn(),
   readThread: vi.fn(),

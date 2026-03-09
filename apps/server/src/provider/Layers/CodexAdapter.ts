@@ -38,6 +38,7 @@ import {
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { listCodexCustomPrompts } from "../codexCatalog.ts";
 
 const PROVIDER = "codex" as const;
 
@@ -1353,6 +1354,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             const managerInput = {
               threadId: input.threadId,
               ...(input.input !== undefined ? { input: input.input } : {}),
+              ...(input.skillSelections !== undefined
+                ? { skillSelections: input.skillSelections }
+                : {}),
               ...(input.model !== undefined ? { model: input.model } : {}),
               ...(input.modelOptions?.codex?.reasoningEffort !== undefined
                 ? { effort: input.modelOptions.codex.reasoningEffort }
@@ -1372,6 +1376,38 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             threadId: input.threadId,
           })),
         );
+      });
+
+    const listCustomPrompts: CodexAdapterShape["listCustomPrompts"] = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          listCodexCustomPrompts(
+            input?.providerOptions ? { providerOptions: input.providerOptions } : undefined,
+          ),
+        catch: (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: ThreadId.makeUnsafe("codex-catalog"),
+            detail: toMessage(cause, "Failed to list Codex custom prompts."),
+            cause,
+          }),
+      });
+
+    const listSkills: CodexAdapterShape["listSkills"] = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          manager.listSkills({
+            cwd: input.cwd,
+            ...(input.providerOptions ? { providerOptions: { codex: input.providerOptions } } : {}),
+            ...(input.forceReload !== undefined ? { forceReload: input.forceReload } : {}),
+          }),
+        catch: (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: ThreadId.makeUnsafe("codex-catalog"),
+            detail: toMessage(cause, "Failed to list Codex skills."),
+            cause,
+          }),
       });
 
     const interruptTurn: CodexAdapterShape["interruptTurn"] = (threadId, turnId) =>
@@ -1496,6 +1532,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       },
       startSession,
       sendTurn,
+      listCustomPrompts,
+      listSkills,
       interruptTurn,
       readThread,
       rollbackThread,
