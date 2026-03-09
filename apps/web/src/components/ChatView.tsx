@@ -228,7 +228,7 @@ import {
 import {
   type ComposerSkillSelection,
   createComposerSkillSelection,
-  reconcileComposerSkillSelections,
+  insertComposerSkillSelection,
 } from "../codexSkillSelections";
 import {
   describeCodexCustomPrompt,
@@ -3452,17 +3452,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
         );
         if (applied) {
           if (!(activePendingProgress?.activeQuestion && activePendingUserInput)) {
-            const nextSelections = reconcileComposerSkillSelections({
+            const nextSelections = insertComposerSkillSelection({
               previousPrompt: snapshot.value,
               nextPrompt,
-              selections: [
-                ...composerSkillSelections,
-                createComposerSkillSelection({
-                  name: item.skill.name,
-                  path: item.skill.path,
-                  rangeStart: trigger.rangeStart,
-                }),
-              ],
+              selections: composerSkillSelections,
+              insertedSelection: createComposerSkillSelection({
+                name: item.skill.name,
+                path: item.skill.path,
+                rangeStart: trigger.rangeStart,
+              }),
             });
             setComposerDraftSkillSelections(threadId, nextSelections);
           }

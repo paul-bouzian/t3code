@@ -830,8 +830,15 @@ describe("WebSocket Server", () => {
           {
             name: "review-code",
             description: "Review a diff",
-            path: "/repo/.codex/skills/review-code",
+            path: "/repo/skills/review-code/SKILL.md",
             scope: "repo" as const,
+            enabled: true,
+          },
+          {
+            name: "create-pr",
+            description: "Create a pull request",
+            path: "/Users/test/skills/create-pr/SKILL.md",
+            scope: "user" as const,
             enabled: true,
           },
         ],
@@ -875,8 +882,15 @@ describe("WebSocket Server", () => {
         {
           name: "review-code",
           description: "Review a diff",
-          path: "/repo/.codex/skills/review-code",
+          path: "/repo/skills/review-code/SKILL.md",
           scope: "repo",
+          enabled: true,
+        },
+        {
+          name: "create-pr",
+          description: "Create a pull request",
+          path: "/Users/test/skills/create-pr/SKILL.md",
+          scope: "user",
           enabled: true,
         },
       ],
