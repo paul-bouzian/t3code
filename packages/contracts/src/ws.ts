@@ -1,5 +1,6 @@
 import { Schema, Struct } from "effect";
 import { ProjectId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas";
+import { CodexListSkillsInput } from "./codex";
 
 import {
   ClientOrchestrationCommand,
@@ -67,6 +68,9 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverUpsertKeybinding: "server.upsertKeybinding",
+
+  // Codex helpers
+  codexListSkills: "codex.listSkills",
 } as const;
 
 // ── Push Event Channels ──────────────────────────────────────────────
@@ -129,6 +133,9 @@ const WebSocketRequestBody = Schema.Union([
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
+
+  // Codex helpers
+  tagRequestBody(WS_METHODS.codexListSkills, CodexListSkillsInput),
 ]);
 
 export const WebSocketRequest = Schema.Struct({

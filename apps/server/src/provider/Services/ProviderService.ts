@@ -12,6 +12,8 @@
  * @module ProviderService
  */
 import type {
+  CodexCatalogProviderOptions,
+  CodexListSkillsResult,
   ProviderInterruptTurnInput,
   ProviderKind,
   ProviderRespondToRequestInput,
@@ -90,6 +92,15 @@ export interface ProviderServiceShape {
   readonly getCapabilities: (
     provider: ProviderKind,
   ) => Effect.Effect<ProviderAdapterCapabilities, ProviderServiceError>;
+
+  /**
+   * List Codex skills for a target cwd.
+   */
+  readonly listCodexSkills: (input: {
+    readonly cwd: string;
+    readonly providerOptions?: CodexCatalogProviderOptions;
+    readonly forceReload?: boolean;
+  }) => Effect.Effect<CodexListSkillsResult, ProviderServiceError>;
 
   /**
    * Roll back provider conversation state by a number of turns.

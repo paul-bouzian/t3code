@@ -1,6 +1,7 @@
+import { detectCodexSkillTokenQuery } from "@t3tools/shared/codex";
 import { splitPromptIntoComposerSegments } from "./composer-editor-mentions";
 
-export type ComposerTriggerKind = "path" | "slash-command" | "slash-model";
+export type ComposerTriggerKind = "path" | "skill" | "slash-command" | "slash-model";
 export type ComposerSlashCommand = "model" | "plan" | "default";
 
 export interface ComposerTrigger {
@@ -144,6 +145,16 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
         rangeEnd: cursor,
       };
     }
+  }
+
+  const skillTrigger = detectCodexSkillTokenQuery(text, cursor);
+  if (skillTrigger) {
+    return {
+      kind: "skill",
+      query: skillTrigger.query,
+      rangeStart: skillTrigger.rangeStart,
+      rangeEnd: skillTrigger.rangeEnd,
+    };
   }
 
   const tokenStart = tokenStartForCursor(text, cursor);

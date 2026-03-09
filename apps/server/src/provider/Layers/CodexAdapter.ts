@@ -1353,6 +1353,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             const managerInput = {
               threadId: input.threadId,
               ...(input.input !== undefined ? { input: input.input } : {}),
+              ...(input.skillSelections !== undefined
+                ? { skillSelections: input.skillSelections }
+                : {}),
               ...(input.model !== undefined ? { model: input.model } : {}),
               ...(input.modelOptions?.codex?.reasoningEffort !== undefined
                 ? { effort: input.modelOptions.codex.reasoningEffort }
@@ -1372,6 +1375,23 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             threadId: input.threadId,
           })),
         );
+      });
+
+    const listSkills: CodexAdapterShape["listSkills"] = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          manager.listSkills({
+            cwd: input.cwd,
+            ...(input.providerOptions ? { providerOptions: { codex: input.providerOptions } } : {}),
+            ...(input.forceReload !== undefined ? { forceReload: input.forceReload } : {}),
+          }),
+        catch: (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: ThreadId.makeUnsafe("codex-catalog"),
+            detail: toMessage(cause, "Failed to list Codex skills."),
+            cause,
+          }),
       });
 
     const interruptTurn: CodexAdapterShape["interruptTurn"] = (threadId, turnId) =>
@@ -1496,6 +1516,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       },
       startSession,
       sendTurn,
+      listSkills,
       interruptTurn,
       readThread,
       rollbackThread,
