@@ -12,5 +12,5 @@
       }
     ]
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts", "../apps/desktop/src/desktopBrand.ts"]
 }

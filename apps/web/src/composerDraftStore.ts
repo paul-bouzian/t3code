@@ -227,30 +227,6 @@ const EMPTY_THREAD_DRAFT = Object.freeze({
 const REASONING_EFFORT_VALUES = new Set<CodexReasoningEffort>(
   REASONING_EFFORT_OPTIONS_BY_PROVIDER.codex,
 );
-const fallbackDraftStorage = (() => {
-  const values = new Map<string, string>();
-  return {
-    getItem: (name: string) => values.get(name) ?? null,
-    setItem: (name: string, value: string) => {
-      values.set(name, value);
-    },
-    removeItem: (name: string) => {
-      values.delete(name);
-    },
-  } satisfies StateStorage;
-})();
-
-function resolveComposerDraftStorage(): StateStorage {
-  if (
-    typeof localStorage !== "undefined" &&
-    typeof localStorage.getItem === "function" &&
-    typeof localStorage.setItem === "function" &&
-    typeof localStorage.removeItem === "function"
-  ) {
-    return localStorage;
-  }
-  return fallbackDraftStorage;
-}
 
 function createEmptyThreadDraft(): ComposerThreadDraftState {
   return {

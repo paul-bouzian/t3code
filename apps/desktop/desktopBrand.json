@@ -1,0 +1,11 @@
+{
+  "appId": "com.paulbouzian.t3code.personal",
+  "artifactName": "T3-Code-Personal-${version}-${arch}.${ext}",
+  "author": "Paul Bouzian",
+  "description": "T3 Code Personal desktop build",
+  "devProductName": "T3 Code Personal (Dev)",
+  "devUserDataDirName": "t3code-personal-dev",
+  "packageName": "t3-code-personal-desktop",
+  "productName": "T3 Code Personal",
+  "userDataDirName": "t3code-personal"
+}

@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import rootPackageJson from "../package.json" with { type: "json" };
+import { desktopBrand } from "../apps/desktop/src/desktopBrand.ts";
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
@@ -447,9 +448,9 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   signed: boolean,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: "com.t3tools.t3code",
+    appId: desktopBrand.appId,
     productName,
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    artifactName: desktopBrand.artifactName,
     directories: {
       buildResources: "apps/desktop/resources",
     },
@@ -613,18 +614,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 
   const stagePackageJson: StagePackageJson = {
-    name: "t3-code-desktop",
+    name: desktopBrand.packageName,
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     private: true,
-    description: "T3 Code desktop build",
-    author: "T3 Tools",
+    description: desktopBrand.description,
+    author: desktopBrand.author,
     main: "apps/desktop/dist-electron/main.js",
     build: yield* createBuildConfig(
       options.platform,
       options.target,
-      desktopPackageJson.productName ?? "T3 Code",
+      desktopBrand.productName || desktopPackageJson.productName,
       options.signed,
     ),
     dependencies: {
@@ -765,7 +766,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     Flag.optional,
   ),
 }).pipe(
-  Command.withDescription("Build a desktop artifact for T3 Code."),
+  Command.withDescription("Build a desktop artifact for the configured desktop brand."),
   Command.withHandler((input) => Effect.flatMap(resolveBuildOptions(input), buildDesktopArtifact)),
 );
 
