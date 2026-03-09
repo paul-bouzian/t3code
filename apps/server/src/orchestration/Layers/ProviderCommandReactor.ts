@@ -1,5 +1,6 @@
 import {
   type ChatAttachment,
+  type CodexSkillSelection,
   CommandId,
   EventId,
   type OrchestrationEvent,
@@ -323,6 +324,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
+    readonly skillSelections?: ReadonlyArray<CodexSkillSelection>;
     readonly provider?: ProviderKind;
     readonly model?: string;
     readonly modelOptions?: ProviderModelOptions;
@@ -359,6 +361,7 @@ const make = Effect.gen(function* () {
       threadId: input.threadId,
       ...(normalizedInput ? { input: normalizedInput } : {}),
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+      ...(input.skillSelections !== undefined ? { skillSelections: input.skillSelections } : {}),
       ...(modelForTurn !== undefined ? { model: modelForTurn } : {}),
       ...(input.modelOptions !== undefined ? { modelOptions: input.modelOptions } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
@@ -472,6 +475,9 @@ const make = Effect.gen(function* () {
       threadId: event.payload.threadId,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+      ...(event.payload.skillSelections !== undefined
+        ? { skillSelections: event.payload.skillSelections }
+        : {}),
       ...(event.payload.provider !== undefined ? { provider: event.payload.provider } : {}),
       ...(event.payload.model !== undefined ? { model: event.payload.model } : {}),
       ...(event.payload.modelOptions !== undefined ? { modelOptions: event.payload.modelOptions } : {}),

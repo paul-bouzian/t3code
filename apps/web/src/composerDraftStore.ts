@@ -14,8 +14,13 @@ import {
   DEFAULT_RUNTIME_MODE,
   type ChatImageAttachment,
 } from "./types";
+import {
+  areComposerSkillSelectionsEqual,
+  type ComposerSkillSelection,
+  reconcileComposerSkillSelections,
+} from "./codexSkillSelections";
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
 export type DraftThreadEnvMode = "local" | "worktree";
@@ -36,6 +41,7 @@ export interface ComposerImageAttachment extends Omit<ChatImageAttachment, "prev
 interface PersistedComposerThreadDraftState {
   prompt: string;
   attachments: PersistedComposerImageAttachment[];
+  skillSelections?: ComposerSkillSelection[];
   provider?: ProviderKind | null;
   model?: string | null;
   runtimeMode?: RuntimeMode | null;
@@ -66,6 +72,7 @@ interface ComposerThreadDraftState {
   images: ComposerImageAttachment[];
   nonPersistedImageIds: string[];
   persistedAttachments: PersistedComposerImageAttachment[];
+  skillSelections: ComposerSkillSelection[];
   provider: ProviderKind | null;
   model: string | null;
   runtimeMode: RuntimeMode | null;
@@ -122,6 +129,10 @@ interface ComposerDraftStoreState {
   clearProjectDraftThreadById: (projectId: ProjectId, threadId: ThreadId) => void;
   clearDraftThread: (threadId: ThreadId) => void;
   setPrompt: (threadId: ThreadId, prompt: string) => void;
+  setSkillSelections: (
+    threadId: ThreadId,
+    skillSelections: readonly ComposerSkillSelection[],
+  ) => void;
   setProvider: (threadId: ThreadId, provider: ProviderKind | null | undefined) => void;
   setModel: (threadId: ThreadId, model: string | null | undefined) => void;
   setRuntimeMode: (threadId: ThreadId, runtimeMode: RuntimeMode | null | undefined) => void;
@@ -152,14 +163,17 @@ const EMPTY_PERSISTED_DRAFT_STORE_STATE: PersistedComposerDraftStoreState = {
 const EMPTY_IMAGES: ComposerImageAttachment[] = [];
 const EMPTY_IDS: string[] = [];
 const EMPTY_PERSISTED_ATTACHMENTS: PersistedComposerImageAttachment[] = [];
+const EMPTY_SKILL_SELECTIONS: ComposerSkillSelection[] = [];
 Object.freeze(EMPTY_IMAGES);
 Object.freeze(EMPTY_IDS);
 Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
+Object.freeze(EMPTY_SKILL_SELECTIONS);
 const EMPTY_THREAD_DRAFT = Object.freeze({
   prompt: "",
   images: EMPTY_IMAGES,
   nonPersistedImageIds: EMPTY_IDS,
   persistedAttachments: EMPTY_PERSISTED_ATTACHMENTS,
+  skillSelections: EMPTY_SKILL_SELECTIONS,
   provider: null,
   model: null,
   runtimeMode: null,
@@ -171,6 +185,30 @@ const EMPTY_THREAD_DRAFT = Object.freeze({
 const REASONING_EFFORT_VALUES = new Set<CodexReasoningEffort>(
   REASONING_EFFORT_OPTIONS_BY_PROVIDER.codex,
 );
+const fallbackDraftStorage = (() => {
+  const values = new Map<string, string>();
+  return {
+    getItem: (name: string) => values.get(name) ?? null,
+    setItem: (name: string, value: string) => {
+      values.set(name, value);
+    },
+    removeItem: (name: string) => {
+      values.delete(name);
+    },
+  } satisfies StateStorage;
+})();
+
+function resolveComposerDraftStorage(): StateStorage {
+  if (
+    typeof localStorage !== "undefined" &&
+    typeof localStorage.getItem === "function" &&
+    typeof localStorage.setItem === "function" &&
+    typeof localStorage.removeItem === "function"
+  ) {
+    return localStorage;
+  }
+  return fallbackDraftStorage;
+}
 
 function createEmptyThreadDraft(): ComposerThreadDraftState {
   return {
@@ -178,6 +216,7 @@ function createEmptyThreadDraft(): ComposerThreadDraftState {
     images: [],
     nonPersistedImageIds: [],
     persistedAttachments: [],
+    skillSelections: [],
     provider: null,
     model: null,
     runtimeMode: null,
@@ -198,6 +237,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.prompt.length === 0 &&
     draft.images.length === 0 &&
     draft.persistedAttachments.length === 0 &&
+    draft.skillSelections.length === 0 &&
     draft.provider === null &&
     draft.model === null &&
     draft.runtimeMode === null &&
@@ -249,6 +289,37 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
     mimeType,
     sizeBytes,
     dataUrl,
+  };
+}
+
+function normalizePersistedSkillSelection(value: unknown): ComposerSkillSelection | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  const name = candidate.name;
+  const path = candidate.path;
+  const rangeStart = candidate.rangeStart;
+  const rangeEnd = candidate.rangeEnd;
+  if (
+    typeof name !== "string" ||
+    typeof path !== "string" ||
+    typeof rangeStart !== "number" ||
+    typeof rangeEnd !== "number" ||
+    !Number.isInteger(rangeStart) ||
+    !Number.isInteger(rangeEnd) ||
+    name.length === 0 ||
+    path.length === 0 ||
+    rangeStart < 0 ||
+    rangeEnd <= rangeStart
+  ) {
+    return null;
+  }
+  return {
+    name,
+    path,
+    rangeStart,
+    rangeEnd,
   };
 }
 
@@ -366,6 +437,12 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
           return normalized ? [normalized] : [];
         })
       : [];
+    const skillSelections = Array.isArray(draftCandidate.skillSelections)
+      ? draftCandidate.skillSelections.flatMap((entry) => {
+          const normalized = normalizePersistedSkillSelection(entry);
+          return normalized ? [normalized] : [];
+        })
+      : [];
     const provider = normalizeProviderKind(draftCandidate.provider);
     const model =
       typeof draftCandidate.model === "string"
@@ -392,6 +469,7 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
     if (
       prompt.length === 0 &&
       attachments.length === 0 &&
+      skillSelections.length === 0 &&
       !provider &&
       !model &&
       !runtimeMode &&
@@ -404,6 +482,7 @@ function normalizePersistedComposerDraftState(value: unknown): PersistedComposer
     nextDraftsByThreadId[threadId as ThreadId] = {
       prompt,
       attachments,
+      ...(skillSelections.length > 0 ? { skillSelections } : {}),
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
@@ -506,11 +585,17 @@ function hydrateImagesFromPersisted(
 function toHydratedThreadDraft(
   persistedDraft: PersistedComposerThreadDraftState,
 ): ComposerThreadDraftState {
+  const skillSelections = reconcileComposerSkillSelections({
+    previousPrompt: persistedDraft.prompt,
+    nextPrompt: persistedDraft.prompt,
+    selections: persistedDraft.skillSelections ?? [],
+  });
   return {
     prompt: persistedDraft.prompt,
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
     nonPersistedImageIds: [],
     persistedAttachments: persistedDraft.attachments,
+    skillSelections,
     provider: persistedDraft.provider ?? null,
     model: persistedDraft.model ?? null,
     runtimeMode: persistedDraft.runtimeMode ?? null,
@@ -768,6 +853,46 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const nextDraft: ComposerThreadDraftState = {
             ...existing,
             prompt,
+            skillSelections: reconcileComposerSkillSelections({
+              previousPrompt: existing.prompt,
+              nextPrompt: prompt,
+              selections: existing.skillSelections,
+            }),
+          };
+          const nextDraftsByThreadId = { ...state.draftsByThreadId };
+          if (shouldRemoveDraft(nextDraft)) {
+            delete nextDraftsByThreadId[threadId];
+          } else {
+            nextDraftsByThreadId[threadId] = nextDraft;
+          }
+          return { draftsByThreadId: nextDraftsByThreadId };
+        });
+      },
+      setSkillSelections: (threadId, skillSelections) => {
+        if (threadId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const existing = state.draftsByThreadId[threadId];
+          if (!existing && skillSelections.length === 0) {
+            return state;
+          }
+          const base = existing ?? createEmptyThreadDraft();
+          const nextSkillSelections = reconcileComposerSkillSelections({
+            previousPrompt: base.prompt,
+            nextPrompt: base.prompt,
+            selections: [...skillSelections],
+          });
+          const unchanged = areComposerSkillSelectionsEqual(
+            base.skillSelections,
+            nextSkillSelections,
+          );
+          if (unchanged) {
+            return state;
+          }
+          const nextDraft: ComposerThreadDraftState = {
+            ...base,
+            skillSelections: nextSkillSelections,
           };
           const nextDraftsByThreadId = { ...state.draftsByThreadId };
           if (shouldRemoveDraft(nextDraft)) {
@@ -1120,6 +1245,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             images: [],
             nonPersistedImageIds: [],
             persistedAttachments: [],
+            skillSelections: [],
           };
           const nextDraftsByThreadId = { ...state.draftsByThreadId };
           if (shouldRemoveDraft(nextDraft)) {
@@ -1169,7 +1295,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
     {
       name: COMPOSER_DRAFT_STORAGE_KEY,
       version: 1,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(resolveComposerDraftStorage),
       partialize: (state) => {
         const persistedDraftsByThreadId: PersistedComposerDraftStoreState["draftsByThreadId"] = {};
         for (const [threadId, draft] of Object.entries(state.draftsByThreadId)) {
@@ -1179,6 +1305,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (
             draft.prompt.length === 0 &&
             draft.persistedAttachments.length === 0 &&
+            draft.skillSelections.length === 0 &&
             draft.provider === null &&
             draft.model === null &&
             draft.runtimeMode === null &&
@@ -1192,6 +1319,9 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             prompt: draft.prompt,
             attachments: draft.persistedAttachments,
           };
+          if (draft.skillSelections.length > 0) {
+            persistedDraft.skillSelections = draft.skillSelections;
+          }
           if (draft.model) {
             persistedDraft.model = draft.model;
           }

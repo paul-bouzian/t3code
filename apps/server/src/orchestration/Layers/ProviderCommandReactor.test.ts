@@ -187,6 +187,8 @@ describe("ProviderCommandReactor", () => {
         Effect.succeed({
           sessionModelSwitch: provider === "codex" ? "in-session" : "in-session",
         }),
+      listCodexCustomPrompts: () => Effect.succeed({ prompts: [] }),
+      listCodexSkills: () => Effect.succeed({ skills: [], errors: [] }),
       rollbackConversation: () => unsupported(),
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     };

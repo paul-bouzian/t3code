@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import { TrimmedNonEmptyString } from "./baseSchemas";
+import { CODEX_MAX_SKILL_SELECTIONS, CodexSkillSelection } from "./codex";
 import { ProviderModelOptions } from "./model";
 import {
   ApprovalRequestId,
@@ -78,6 +79,9 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   attachments: Schema.optional(
     Schema.Array(ChatAttachment).check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS)),
+  ),
+  skillSelections: Schema.optional(
+    Schema.Array(CodexSkillSelection).check(Schema.isMaxLength(CODEX_MAX_SKILL_SELECTIONS)),
   ),
   model: Schema.optional(TrimmedNonEmptyStringSchema),
   modelOptions: Schema.optional(ProviderModelOptions),

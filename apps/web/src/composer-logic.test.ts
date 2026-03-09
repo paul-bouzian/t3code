@@ -56,6 +56,42 @@ describe("detectComposerTrigger", () => {
       rangeEnd: text.length,
     });
   });
+
+  it("detects custom Codex prompt tokens while typing", () => {
+    const text = "/prompts:code-simplifier";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "prompts:code-simplifier",
+      rangeStart: 0,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("detects Codex skill tokens while typing", () => {
+    const text = "Use $code-review";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "skill",
+      query: "code-review",
+      rangeStart: "Use ".length,
+      rangeEnd: text.length,
+    });
+  });
+
+  it("detects a bare Codex skill trigger", () => {
+    const text = "Use $";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "skill",
+      query: "",
+      rangeStart: "Use ".length,
+      rangeEnd: text.length,
+    });
+  });
 });
 
 describe("replaceTextRange", () => {

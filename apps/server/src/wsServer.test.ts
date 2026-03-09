@@ -761,6 +761,134 @@ describe("WebSocket Server", () => {
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
   });
 
+  it("routes codex.listCustomPrompts through ProviderService", async () => {
+    const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+    const listCodexCustomPrompts = vi.fn(() =>
+      Effect.succeed({
+        prompts: [
+          {
+            name: "code-simplifier",
+            path: "/Users/test/.codex/prompts/code-simplifier.md",
+            content: "Simplify this code.",
+            description: "Simplify a code sample",
+            argumentHint: null,
+          },
+        ],
+      }),
+    );
+    const providerService: ProviderServiceShape = {
+      startSession: () => unsupported(),
+      sendTurn: () => unsupported(),
+      interruptTurn: () => unsupported(),
+      respondToRequest: () => unsupported(),
+      respondToUserInput: () => unsupported(),
+      stopSession: () => unsupported(),
+      listSessions: () => Effect.succeed([]),
+      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      listCodexCustomPrompts,
+      listCodexSkills: () => Effect.succeed({ skills: [], errors: [] }),
+      rollbackConversation: () => unsupported(),
+      streamEvents: Stream.empty,
+    };
+
+    server = await createTestServer({
+      cwd: "/test",
+      providerLayer: Layer.succeed(ProviderService, providerService),
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const ws = await connectWs(port);
+    connections.push(ws);
+    await waitForMessage(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.codexListCustomPrompts, {
+      providerOptions: { homePath: "/Users/test/.codex" },
+    });
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({
+      prompts: [
+        {
+          name: "code-simplifier",
+          path: "/Users/test/.codex/prompts/code-simplifier.md",
+          content: "Simplify this code.",
+          description: "Simplify a code sample",
+          argumentHint: null,
+        },
+      ],
+    });
+    expect(listCodexCustomPrompts).toHaveBeenCalledWith({
+      providerOptions: { homePath: "/Users/test/.codex" },
+    });
+  });
+
+  it("routes codex.listSkills through ProviderService", async () => {
+    const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+    const listCodexSkills = vi.fn(() =>
+      Effect.succeed({
+        skills: [
+          {
+            name: "review-code",
+            description: "Review a diff",
+            path: "/repo/.codex/skills/review-code",
+            scope: "repo" as const,
+            enabled: true,
+          },
+        ],
+        errors: [],
+      }),
+    );
+    const providerService: ProviderServiceShape = {
+      startSession: () => unsupported(),
+      sendTurn: () => unsupported(),
+      interruptTurn: () => unsupported(),
+      respondToRequest: () => unsupported(),
+      respondToUserInput: () => unsupported(),
+      stopSession: () => unsupported(),
+      listSessions: () => Effect.succeed([]),
+      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      listCodexCustomPrompts: () => Effect.succeed({ prompts: [] }),
+      listCodexSkills,
+      rollbackConversation: () => unsupported(),
+      streamEvents: Stream.empty,
+    };
+
+    server = await createTestServer({
+      cwd: "/test",
+      providerLayer: Layer.succeed(ProviderService, providerService),
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const ws = await connectWs(port);
+    connections.push(ws);
+    await waitForMessage(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.codexListSkills, {
+      cwd: "/repo",
+      providerOptions: { binaryPath: "/usr/local/bin/codex" },
+      forceReload: true,
+    });
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({
+      skills: [
+        {
+          name: "review-code",
+          description: "Review a diff",
+          path: "/repo/.codex/skills/review-code",
+          scope: "repo",
+          enabled: true,
+        },
+      ],
+      errors: [],
+    });
+    expect(listCodexSkills).toHaveBeenCalledWith({
+      cwd: "/repo",
+      providerOptions: { binaryPath: "/usr/local/bin/codex" },
+      forceReload: true,
+    });
+  });
+
   it("bootstraps default keybindings file when missing", async () => {
     const stateDir = makeTempDir("t3code-state-bootstrap-keybindings-");
     const keybindingsPath = path.join(stateDir, "keybindings.json");
@@ -1171,6 +1299,8 @@ describe("WebSocket Server", () => {
       stopSession: () => unsupported(),
       listSessions: () => Effect.succeed([]),
       getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      listCodexCustomPrompts: () => Effect.succeed({ prompts: [] }),
+      listCodexSkills: () => Effect.succeed({ skills: [], errors: [] }),
       rollbackConversation: () => unsupported(),
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     };

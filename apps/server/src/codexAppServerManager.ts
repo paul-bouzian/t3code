@@ -5,6 +5,8 @@ import readline from "node:readline";
 
 import {
   ApprovalRequestId,
+  type CodexCatalogProviderOptions,
+  type CodexListSkillsResult,
   EventId,
   ProviderItemId,
   ProviderRequestKind,
@@ -67,9 +69,19 @@ interface CodexSessionContext {
   account: CodexAccountSnapshot;
   child: ChildProcessWithoutNullStreams;
   output: readline.Interface;
+  binaryPath: string;
+  homePath?: string;
   pending: Map<PendingRequestKey, PendingRequest>;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
+  nextRequestId: number;
+  stopping: boolean;
+}
+
+interface CodexProbeContext {
+  child: ChildProcessWithoutNullStreams;
+  output: readline.Interface;
+  pending: Map<PendingRequestKey, PendingRequest>;
   nextRequestId: number;
   stopping: boolean;
 }
@@ -117,6 +129,7 @@ export interface CodexAppServerSendTurnInput {
   readonly threadId: ThreadId;
   readonly input?: string;
   readonly attachments?: ReadonlyArray<{ type: "image"; url: string }>;
+  readonly skillSelections?: ReadonlyArray<{ name: string; path: string }>;
   readonly model?: string;
   readonly serviceTier?: string | null;
   readonly effort?: string;
@@ -134,6 +147,14 @@ export interface CodexAppServerStartSessionInput {
   readonly runtimeMode: RuntimeMode;
 }
 
+export interface CodexAppServerListSkillsInput {
+  readonly cwd: string;
+  readonly providerOptions?: {
+    readonly codex?: CodexCatalogProviderOptions;
+  };
+  readonly forceReload?: boolean;
+}
+
 export interface CodexThreadTurnSnapshot {
   id: TurnId;
   items: unknown[];
@@ -145,6 +166,7 @@ export interface CodexThreadSnapshot {
 }
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
+const CODEX_SKILLS_LIST_CACHE_TTL_MS = 15_000;
 
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
@@ -174,6 +196,10 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function asArray(value: unknown): unknown[] | undefined {
+  return Array.isArray(value) ? value : undefined;
 }
 
 export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapshot {
@@ -514,6 +540,11 @@ export interface CodexAppServerManagerEvents {
 
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
+  private readonly skillsListCache = new Map<
+    string,
+    { expiresAt: number; value: CodexListSkillsResult }
+  >();
+  private readonly skillsListInFlight = new Map<string, Promise<CodexListSkillsResult>>();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   constructor(services?: ServiceMap.ServiceMap<never>) {
@@ -568,6 +599,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         },
         child,
         output,
+        binaryPath: codexBinaryPath,
+        ...(codexHomePath ? { homePath: codexHomePath } : {}),
         pending: new Map(),
         pendingApprovals: new Map(),
         pendingUserInputs: new Map(),
@@ -734,7 +767,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const context = this.requireSession(input.threadId);
 
     const turnInput: Array<
-      { type: "text"; text: string; text_elements: [] } | { type: "image"; url: string }
+      | { type: "text"; text: string; text_elements: [] }
+      | { type: "image"; url: string }
+      | { type: "skill"; name: string; path: string }
     > = [];
     if (input.input) {
       turnInput.push({
@@ -751,6 +786,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         });
       }
     }
+    for (const selection of input.skillSelections ?? []) {
+      turnInput.push({
+        type: "skill",
+        name: selection.name,
+        path: selection.path,
+      });
+    }
     if (turnInput.length === 0) {
       throw new Error("Turn input must include text or attachments.");
     }
@@ -766,7 +808,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const turnStartParams: {
       threadId: string;
       input: Array<
-        { type: "text"; text: string; text_elements: [] } | { type: "image"; url: string }
+        | { type: "text"; text: string; text_elements: [] }
+        | { type: "image"; url: string }
+        | { type: "skill"; name: string; path: string }
       >;
       model?: string;
       serviceTier?: string | null;
@@ -832,6 +876,69 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? { resumeCursor: context.session.resumeCursor }
         : {}),
     };
+  }
+
+  async listSkills(input: CodexAppServerListSkillsInput): Promise<CodexListSkillsResult> {
+    const resolvedCwd = input.cwd.trim();
+    if (resolvedCwd.length === 0) {
+      throw new Error("skills/list requires a non-empty cwd.");
+    }
+
+    const codexOptions = readCodexCatalogProviderOptions(input);
+    const cacheKey = this.skillsListCacheKey({
+      cwd: resolvedCwd,
+      ...(codexOptions.binaryPath ? { binaryPath: codexOptions.binaryPath } : {}),
+      ...(codexOptions.homePath ? { homePath: codexOptions.homePath } : {}),
+    });
+    const now = Date.now();
+    if (!input.forceReload) {
+      const cached = this.skillsListCache.get(cacheKey);
+      if (cached && cached.expiresAt > now) {
+        return cached.value;
+      }
+      const inFlight = this.skillsListInFlight.get(cacheKey);
+      if (inFlight) {
+        return inFlight;
+      }
+    }
+
+    const request = (async () => {
+      const activeContext = this.findSkillsContext({
+        cwd: resolvedCwd,
+        ...(codexOptions.binaryPath ? { binaryPath: codexOptions.binaryPath } : {}),
+        ...(codexOptions.homePath ? { homePath: codexOptions.homePath } : {}),
+      });
+      const rawResponse = activeContext
+        ? await this.sendRequest(activeContext, "skills/list", {
+            cwds: [resolvedCwd],
+            forceReload: input.forceReload === true,
+          })
+        : await this.withTemporaryContext(
+            {
+              cwd: resolvedCwd,
+              ...(codexOptions.binaryPath ? { binaryPath: codexOptions.binaryPath } : {}),
+              ...(codexOptions.homePath ? { homePath: codexOptions.homePath } : {}),
+            },
+            (context) =>
+              this.sendProbeRequest(context, "skills/list", {
+                cwds: [resolvedCwd],
+                forceReload: input.forceReload === true,
+              }),
+          );
+      const parsed = readCodexSkillsListResponse(rawResponse, resolvedCwd);
+      this.skillsListCache.set(cacheKey, {
+        expiresAt: Date.now() + CODEX_SKILLS_LIST_CACHE_TTL_MS,
+        value: parsed,
+      });
+      return parsed;
+    })();
+
+    this.skillsListInFlight.set(cacheKey, request);
+    try {
+      return await request;
+    } finally {
+      this.skillsListInFlight.delete(cacheKey);
+    }
   }
 
   async interruptTurn(threadId: ThreadId, turnId?: TurnId): Promise<void> {
@@ -1017,6 +1124,173 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
+  private skillsListCacheKey(input: {
+    readonly cwd: string;
+    readonly binaryPath?: string;
+    readonly homePath?: string;
+  }): string {
+    return JSON.stringify({
+      cwd: input.cwd,
+      binaryPath: input.binaryPath ?? null,
+      homePath: input.homePath ?? null,
+    });
+  }
+
+  private findSkillsContext(input: {
+    readonly cwd: string;
+    readonly binaryPath?: string;
+    readonly homePath?: string;
+  }): CodexSessionContext | undefined {
+    for (const context of this.sessions.values()) {
+      if (context.stopping || context.session.status === "closed") {
+        continue;
+      }
+      if (context.session.cwd !== input.cwd) {
+        continue;
+      }
+      const binaryPath = input.binaryPath ?? "codex";
+      if (context.binaryPath !== binaryPath) {
+        continue;
+      }
+      if ((context.homePath ?? undefined) !== (input.homePath ?? undefined)) {
+        continue;
+      }
+      return context;
+    }
+    return undefined;
+  }
+
+  private async withTemporaryContext<T>(
+    input: {
+      readonly cwd: string;
+      readonly binaryPath?: string;
+      readonly homePath?: string;
+    },
+    operation: (context: CodexProbeContext) => Promise<T>,
+  ): Promise<T> {
+    const binaryPath = input.binaryPath ?? "codex";
+    this.assertSupportedCodexCliVersion({
+      binaryPath,
+      cwd: input.cwd,
+      ...(input.homePath ? { homePath: input.homePath } : {}),
+    });
+
+    const child = spawn(binaryPath, ["app-server"], {
+      cwd: input.cwd,
+      env: {
+        ...process.env,
+        ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: process.platform === "win32",
+    });
+    const output = readline.createInterface({ input: child.stdout });
+    const context: CodexProbeContext = {
+      child,
+      output,
+      pending: new Map(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+
+    const onLine = (line: string) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        return;
+      }
+      if (this.isResponse(parsed)) {
+        this.handleProbeResponse(context, parsed);
+        return;
+      }
+      if (this.isServerRequest(parsed)) {
+        this.writeProbeMessage(context, {
+          id: parsed.id,
+          error: {
+            code: -32601,
+            message: `Unsupported server request: ${parsed.method}`,
+          },
+        });
+      }
+    };
+    output.on("line", onLine);
+
+    try {
+      await this.sendProbeRequest(context, "initialize", buildCodexInitializeParams());
+      this.writeProbeMessage(context, { method: "initialized" });
+      return await operation(context);
+    } finally {
+      context.stopping = true;
+      output.off("line", onLine);
+      output.close();
+      for (const pending of context.pending.values()) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error("Probe session stopped before request completed."));
+      }
+      context.pending.clear();
+      if (!child.killed) {
+        killChildTree(child);
+      }
+    }
+  }
+
+  private async sendProbeRequest<TResponse>(
+    context: CodexProbeContext,
+    method: string,
+    params: unknown,
+    timeoutMs = 20_000,
+  ): Promise<TResponse> {
+    const id = context.nextRequestId;
+    context.nextRequestId += 1;
+
+    const result = await new Promise<unknown>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        context.pending.delete(String(id));
+        reject(new Error(`Timed out waiting for ${method}.`));
+      }, timeoutMs);
+
+      context.pending.set(String(id), {
+        method,
+        timeout,
+        resolve,
+        reject,
+      });
+      this.writeProbeMessage(context, {
+        method,
+        id,
+        params,
+      });
+    });
+
+    return result as TResponse;
+  }
+
+  private handleProbeResponse(context: CodexProbeContext, response: JsonRpcResponse): void {
+    const key = String(response.id);
+    const pending = context.pending.get(key);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timeout);
+    context.pending.delete(key);
+
+    if (response.error?.message) {
+      pending.reject(new Error(`${pending.method} failed: ${String(response.error.message)}`));
+      return;
+    }
+
+    pending.resolve(response.result);
+  }
+
+  private writeProbeMessage(context: CodexProbeContext, message: unknown): void {
+    const encoded = JSON.stringify(message);
+    if (!context.child.stdin.writable) {
+      throw new Error("Cannot write to codex app-server probe stdin.");
+    }
+    context.child.stdin.write(`${encoded}\n`);
+  }
+
   private requireSession(threadId: ThreadId): CodexSessionContext {
     const context = this.sessions.get(threadId);
     if (!context) {
@@ -1179,6 +1453,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         status: willRetry ? "running" : "error",
         lastError: message ?? context.session.lastError,
       });
+      return;
+    }
+
+    if (notification.method === "skills/changed") {
+      this.skillsListCache.clear();
     }
   }
 
@@ -1519,6 +1798,120 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
     ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
     ...(options.homePath ? { homePath: options.homePath } : {}),
   };
+}
+
+function readCodexCatalogProviderOptions(input: CodexAppServerListSkillsInput): {
+  readonly binaryPath?: string;
+  readonly homePath?: string;
+} {
+  const options = input.providerOptions?.codex;
+  if (!options) {
+    return {};
+  }
+  return {
+    ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
+    ...(options.homePath ? { homePath: options.homePath } : {}),
+  };
+}
+
+function readCodexSkillsListResponse(
+  response: unknown,
+  requestedCwd: string,
+): CodexListSkillsResult {
+  const record = asObject(response);
+  const data = asArray(record?.data) ?? [];
+  const selectedEntry =
+    data.find((entry) => asString(asObject(entry)?.cwd) === requestedCwd) ?? data[0];
+  const parsedEntry = asObject(selectedEntry);
+  const rawSkills = asArray(parsedEntry?.skills) ?? [];
+  const rawErrors = asArray(parsedEntry?.errors) ?? [];
+
+  return {
+    skills: rawSkills.flatMap((value) => {
+      const skill = asObject(value);
+      const name = asString(skill?.name);
+      const description = asString(skill?.description);
+      const path = asString(skill?.path);
+      const scope = asString(skill?.scope);
+      const enabled = typeof skill?.enabled === "boolean" ? skill.enabled : undefined;
+      if (!name || description === undefined || !path || !isCodexSkillScope(scope) || enabled === undefined) {
+        return [];
+      }
+      const rawInterface = asObject(skill?.interface);
+      const skillInterface = rawInterface
+        ? {
+            ...(readNullableString(rawInterface, "displayName") !== undefined
+              ? { displayName: readNullableString(rawInterface, "displayName") ?? null }
+              : {}),
+            ...(readNullableString(rawInterface, "shortDescription") !== undefined
+              ? { shortDescription: readNullableString(rawInterface, "shortDescription") ?? null }
+              : {}),
+            ...(readNullableString(rawInterface, "iconSmall") !== undefined
+              ? { iconSmall: readNullableString(rawInterface, "iconSmall") ?? null }
+              : {}),
+            ...(readNullableString(rawInterface, "iconLarge") !== undefined
+              ? { iconLarge: readNullableString(rawInterface, "iconLarge") ?? null }
+              : {}),
+            ...(readNullableString(rawInterface, "brandColor") !== undefined
+              ? { brandColor: readNullableString(rawInterface, "brandColor") ?? null }
+              : {}),
+            ...(readNullableString(rawInterface, "defaultPrompt") !== undefined
+              ? { defaultPrompt: readNullableString(rawInterface, "defaultPrompt") ?? null }
+              : {}),
+          }
+        : undefined;
+      const shortDescription =
+        asString(skill?.shortDescription) ?? asString(skill?.short_description);
+      return [
+        {
+          name,
+          description,
+          ...(shortDescription ? { shortDescription } : {}),
+          ...(skillInterface && Object.keys(skillInterface).length > 0
+            ? { interface: skillInterface }
+            : {}),
+          path,
+          scope,
+          enabled,
+        },
+      ];
+    }),
+    errors: rawErrors.flatMap((value) => {
+      if (typeof value === "string" && value.trim().length > 0) {
+        return [{ message: value.trim() }];
+      }
+      const error = asObject(value);
+      const message = asString(error?.message) ?? asString(error?.error);
+      const path = asString(error?.path);
+      if (!message) {
+        return [];
+      }
+      return [
+        {
+          ...(path ? { path } : {}),
+          message,
+        },
+      ];
+    }),
+  };
+}
+
+function readNullableString(
+  value: Record<string, unknown>,
+  key: string,
+): string | null | undefined {
+  if (!(key in value)) {
+    return undefined;
+  }
+  const candidate = value[key];
+  if (candidate === null) {
+    return null;
+  }
+  return typeof candidate === "string" ? candidate : undefined;
+}
+
+function isCodexSkillScope(value: string | undefined): value is "user" | "repo" | "system" | "admin" {
+  return value === "user" || value === "repo" || value === "system" || value === "admin";
 }
 
 function assertSupportedCodexCliVersion(input: {

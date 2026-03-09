@@ -1,7 +1,43 @@
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear() {
+      values.clear();
+    },
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    key(index) {
+      return Array.from(values.keys())[index] ?? null;
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
+    setItem(key, value) {
+      values.set(key, value);
+    },
+  };
+}
+
+vi.hoisted(() => {
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: createMemoryStorage(),
+    writable: true,
+  });
+});
+
 import { type ComposerImageAttachment, useComposerDraftStore } from "./composerDraftStore";
+
+beforeEach(() => {
+  globalThis.localStorage.clear();
+});
 
 function makeImage(input: {
   id: string;
@@ -151,6 +187,94 @@ describe("composerDraftStore clearComposerContent", () => {
     const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
     expect(draft).toBeUndefined();
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:optimistic");
+  });
+
+  it("clears stored Codex skill selections alongside the prompt", () => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {
+        [threadId]: {
+          prompt: "Use $code-review",
+          images: [],
+          nonPersistedImageIds: [],
+          persistedAttachments: [],
+          skillSelections: [
+            {
+              name: "code-review",
+              path: "/tmp/code-review/SKILL.md",
+              rangeStart: 4,
+              rangeEnd: 16,
+            },
+          ],
+          provider: null,
+          model: null,
+          runtimeMode: null,
+          interactionMode: null,
+          effort: null,
+          codexFastMode: false,
+        },
+      },
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+
+    useComposerDraftStore.getState().clearComposerContent(threadId);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
+
+describe("composerDraftStore skillSelections", () => {
+  const threadId = ThreadId.makeUnsafe("thread-skills");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("drops stale skill bindings when the token is removed from the prompt", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadId, "Use $code-review now");
+    store.setSkillSelections(threadId, [
+      {
+        name: "code-review",
+        path: "/tmp/code-review/SKILL.md",
+        rangeStart: 4,
+        rangeEnd: 16,
+      },
+    ]);
+
+    store.setPrompt(threadId, "Use now");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.skillSelections).toEqual(
+      [],
+    );
+  });
+
+  it("shifts skill binding ranges when text is inserted before the token", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadId, "$code-review now");
+    store.setSkillSelections(threadId, [
+      {
+        name: "code-review",
+        path: "/tmp/code-review/SKILL.md",
+        rangeStart: 0,
+        rangeEnd: 12,
+      },
+    ]);
+
+    store.setPrompt(threadId, "Please $code-review now");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.skillSelections).toEqual([
+      {
+        name: "code-review",
+        path: "/tmp/code-review/SKILL.md",
+        rangeStart: 7,
+        rangeEnd: 19,
+      },
+    ]);
   });
 });
 
@@ -447,6 +571,78 @@ describe("composerDraftStore runtime and interaction settings", () => {
     store.setInteractionMode(threadId, "plan");
     store.setRuntimeMode(threadId, null);
     store.setInteractionMode(threadId, null);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
+
+describe("composerDraftStore skill selections", () => {
+  const threadId = ThreadId.makeUnsafe("thread-skills");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("reconciles skill selection ranges when the prompt shifts", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setPrompt(threadId, "$code-review now");
+    store.setSkillSelections(threadId, [
+      {
+        name: "code-review",
+        path: "/tmp/skills/code-review",
+        rangeStart: 0,
+        rangeEnd: "$code-review".length,
+      },
+    ]);
+    store.setPrompt(threadId, "Please $code-review now");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.skillSelections).toEqual([
+      {
+        name: "code-review",
+        path: "/tmp/skills/code-review",
+        rangeStart: "Please ".length,
+        rangeEnd: "Please ".length + "$code-review".length,
+      },
+    ]);
+  });
+
+  it("drops stale skill selections when the token is removed", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setPrompt(threadId, "$code-review now");
+    store.setSkillSelections(threadId, [
+      {
+        name: "code-review",
+        path: "/tmp/skills/code-review",
+        rangeStart: 0,
+        rangeEnd: "$code-review".length,
+      },
+    ]);
+    store.setPrompt(threadId, "Review this now");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.skillSelections).toEqual(
+      [],
+    );
+  });
+
+  it("clears skill selections with the rest of the composer content", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setPrompt(threadId, "$code-review now");
+    store.setSkillSelections(threadId, [
+      {
+        name: "code-review",
+        path: "/tmp/skills/code-review",
+        rangeStart: 0,
+        rangeEnd: "$code-review".length,
+      },
+    ]);
+    store.clearComposerContent(threadId);
 
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
   });
