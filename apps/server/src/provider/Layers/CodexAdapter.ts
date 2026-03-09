@@ -38,6 +38,7 @@ import {
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { listCodexCustomPrompts } from "../codexCatalog.ts";
 
 const PROVIDER = "codex" as const;
 
@@ -1374,6 +1375,21 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         );
       });
 
+    const listCustomPrompts: CodexAdapterShape["listCustomPrompts"] = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          listCodexCustomPrompts(
+            input?.providerOptions ? { providerOptions: input.providerOptions } : undefined,
+          ),
+        catch: (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: ThreadId.makeUnsafe("codex-catalog"),
+            detail: toMessage(cause, "Failed to list Codex custom prompts."),
+            cause,
+          }),
+      });
+
     const interruptTurn: CodexAdapterShape["interruptTurn"] = (threadId, turnId) =>
       Effect.tryPromise({
         try: () => manager.interruptTurn(threadId, turnId),
@@ -1496,6 +1512,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       },
       startSession,
       sendTurn,
+      listCustomPrompts,
       interruptTurn,
       readThread,
       rollbackThread,

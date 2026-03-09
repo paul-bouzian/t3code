@@ -10,16 +10,23 @@
  *
  * @module CodexAdapter
  */
-import { ServiceMap } from "effect";
+import { ServiceMap, type Effect } from "effect";
 
 import type { ProviderAdapterError } from "../Errors.ts";
 import type { ProviderAdapterShape } from "./ProviderAdapter.ts";
+import type {
+  CodexCatalogProviderOptions,
+  CodexListCustomPromptsResult,
+} from "@t3tools/contracts";
 
 /**
  * CodexAdapterShape - Service API for the Codex provider adapter.
  */
 export interface CodexAdapterShape extends ProviderAdapterShape<ProviderAdapterError> {
   readonly provider: "codex";
+  readonly listCustomPrompts: (input?: {
+    readonly providerOptions?: CodexCatalogProviderOptions;
+  }) => Effect.Effect<CodexListCustomPromptsResult, ProviderAdapterError>;
 }
 
 /**

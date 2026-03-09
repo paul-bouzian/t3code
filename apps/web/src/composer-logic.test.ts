@@ -56,6 +56,18 @@ describe("detectComposerTrigger", () => {
       rangeEnd: text.length,
     });
   });
+
+  it("detects custom Codex prompt tokens while typing", () => {
+    const text = "/prompts:code-simplifier";
+    const trigger = detectComposerTrigger(text, text.length);
+
+    expect(trigger).toEqual({
+      kind: "slash-command",
+      query: "prompts:code-simplifier",
+      rangeStart: 0,
+      rangeEnd: text.length,
+    });
+  });
 });
 
 describe("replaceTextRange", () => {

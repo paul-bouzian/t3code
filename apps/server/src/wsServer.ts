@@ -254,6 +254,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const gitManager = yield* GitManager;
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
+  const providerService = yield* ProviderService;
   const providerHealth = yield* ProviderHealth;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -902,6 +903,13 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           providers,
           availableEditors,
         };
+
+      case WS_METHODS.codexListCustomPrompts: {
+        const body = stripRequestTag(request.body);
+        return yield* providerService.listCodexCustomPrompts(
+          body.providerOptions ? { providerOptions: body.providerOptions } : undefined,
+        );
+      }
 
       case WS_METHODS.serverUpsertKeybinding: {
         const body = stripRequestTag(request.body);
