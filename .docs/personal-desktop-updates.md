@@ -36,6 +36,7 @@ Behavior:
 - publishes only the assets needed for desktop auto-update
 - does not publish npm packages
 - does not build Linux, Windows, or Intel macOS artifacts
+- auto-enables Apple signing/notarization when all required secrets are present
 
 ## Local trigger
 
@@ -56,6 +57,20 @@ which triggers the GitHub Actions workflow on `main`.
 For the updater to switch to your fork, the app must be installed once from a build produced by this fork.
 
 After that, future updates can come from your fork release feed automatically.
+
+## macOS signing requirement
+
+On macOS, `electron-updater` can download an update for an unsigned build, but it cannot install it in place. The app must be signed, and in practice notarized, for the in-app restart/install step to succeed.
+
+The personal workflow now supports the same secrets as the upstream release flow:
+
+- `CSC_LINK`
+- `CSC_KEY_PASSWORD`
+- `APPLE_API_KEY`
+- `APPLE_API_KEY_ID`
+- `APPLE_API_ISSUER`
+
+If those secrets are missing, the workflow still publishes a DMG/ZIP release, but the in-app install step will fail and you will need to install the new DMG manually.
 
 ## Private repo note
 

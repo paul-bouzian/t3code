@@ -281,10 +281,12 @@ let updatePollTimer: ReturnType<typeof setInterval> | null = null;
 let updateStartupTimer: ReturnType<typeof setTimeout> | null = null;
 let updateCheckInFlight = false;
 let updateDownloadInFlight = false;
+let updateInstallInFlight = false;
 let updaterConfigured = false;
 let updateState: DesktopUpdateState = initialUpdateState();
 
 function resolveUpdaterErrorContext(): DesktopUpdateErrorContext {
+  if (updateInstallInFlight) return "install";
   if (updateDownloadInFlight) return "download";
   if (updateCheckInFlight) return "check";
   return updateState.errorContext;
@@ -446,7 +448,10 @@ function handleFatalStartupError(stage: string, error: unknown): void {
   console.error(`[desktop] fatal startup error (${stage})`, error);
   if (!isQuitting) {
     isQuitting = true;
-    dialog.showErrorBox(`${APP_DISPLAY_NAME} failed to start`, `Stage: ${stage}\n${message}${detail}`);
+    dialog.showErrorBox(
+      `${APP_DISPLAY_NAME} failed to start`,
+      `Stage: ${stage}\n${message}${detail}`,
+    );
   }
   stopBackend();
   restoreStdIoCapture?.();
@@ -778,19 +783,50 @@ async function installDownloadedUpdate(): Promise<{ accepted: boolean; completed
     return { accepted: false, completed: false };
   }
 
+  updateInstallInFlight = true;
   isQuitting = true;
   clearUpdatePollTimer();
   try {
     await stopBackendAndWaitForExit();
     autoUpdater.quitAndInstall();
-    return { accepted: true, completed: true };
+    return { accepted: true, completed: false };
   } catch (error: unknown) {
-    const message = formatErrorMessage(error);
-    isQuitting = false;
-    setUpdateState(reduceDesktopUpdateStateOnInstallFailure(updateState, message));
-    console.error(`[desktop-updater] Failed to install update: ${message}`);
+    handleInstallFailure(formatErrorMessage(error));
     return { accepted: true, completed: false };
   }
+}
+
+function formatInstallFailureDetail(message: string): string {
+  if (/code signature/i.test(message)) {
+    return `${message}\n\nThis macOS build is not signed/notarized in a way the updater can install automatically. Configure Apple signing secrets for the personal release workflow to enable in-app installation.`;
+  }
+
+  return message;
+}
+
+function handleInstallFailure(message: string): void {
+  updateInstallInFlight = false;
+  isQuitting = false;
+  setUpdateState(reduceDesktopUpdateStateOnInstallFailure(updateState, message));
+  console.error(`[desktop-updater] Failed to install update: ${message}`);
+
+  if (!backendProcess && !restartTimer) {
+    startBackend();
+  }
+
+  const owner = BrowserWindow.getFocusedWindow() ?? mainWindow;
+  const options: Electron.MessageBoxOptions = {
+    type: "error",
+    title: "Could not install update",
+    message: "The downloaded update could not be installed.",
+    detail: formatInstallFailureDetail(message),
+    buttons: ["OK"],
+  };
+  if (owner && !owner.isDestroyed()) {
+    void dialog.showMessageBox(owner, options).catch(() => {});
+    return;
+  }
+  void dialog.showMessageBox(options).catch(() => {});
 }
 
 function configureAutoUpdater(): void {
@@ -858,6 +894,10 @@ function configureAutoUpdater(): void {
   });
   autoUpdater.on("error", (error) => {
     const message = formatErrorMessage(error);
+    if (updateInstallInFlight) {
+      handleInstallFailure(message);
+      return;
+    }
     if (!updateCheckInFlight && !updateDownloadInFlight) {
       setUpdateState({
         status: "error",

@@ -90,7 +90,7 @@ describe("updateMachine", () => {
 
     expect(downloaded.status).toBe("downloaded");
     expect(downloaded.downloadedVersion).toBe("1.1.0");
-    expect(failedInstall.status).toBe("downloaded");
+    expect(failedInstall.status).toBe("error");
     expect(failedInstall.errorContext).toBe("install");
     expect(failedInstall.canRetry).toBe(true);
   });

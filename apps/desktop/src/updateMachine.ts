@@ -152,7 +152,7 @@ export function reduceDesktopUpdateStateOnInstallFailure(
 ): DesktopUpdateState {
   return {
     ...state,
-    status: "downloaded",
+    status: "error",
     message,
     errorContext: "install",
     canRetry: true,
