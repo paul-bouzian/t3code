@@ -1,4 +1,4 @@
-// This file mostly exists because we want dev mode to say "T3 Code (Dev)" instead of "electron"
+// This file mostly exists so dev mode shows the configured desktop app name instead of "electron".
 
 import { spawnSync } from "node:child_process";
 import {
@@ -16,13 +16,36 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
-const APP_DISPLAY_NAME = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
-const APP_BUNDLE_ID = "com.t3tools.t3code";
-const LAUNCHER_VERSION = 1;
-
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const desktopDir = resolve(__dirname, "..");
+const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
+const LAUNCHER_VERSION = 1;
+
+function readDesktopBrand() {
+  const brandPath = join(desktopDir, "desktopBrand.json");
+  const rawBrand = JSON.parse(readFileSync(brandPath, "utf8"));
+  if (typeof rawBrand !== "object" || rawBrand === null) {
+    throw new Error(`Invalid desktop brand config at ${brandPath}`);
+  }
+
+  function readString(key) {
+    const value = rawBrand[key];
+    if (typeof value !== "string" || value.trim().length === 0) {
+      throw new Error(`Desktop brand config "${key}" must be a non-empty string.`);
+    }
+    return value.trim();
+  }
+
+  return {
+    appId: readString("appId"),
+    devProductName: readString("devProductName"),
+    productName: readString("productName"),
+  };
+}
+
+const desktopBrand = readDesktopBrand();
+const APP_DISPLAY_NAME = isDevelopment ? desktopBrand.devProductName : desktopBrand.productName;
+const APP_BUNDLE_ID = desktopBrand.appId;
 
 function setPlistString(plistPath, key, value) {
   const replaceResult = spawnSync("plutil", ["-replace", key, "-string", value, plistPath], {

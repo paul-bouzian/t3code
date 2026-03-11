@@ -12,6 +12,9 @@
  * @module ProviderService
  */
 import type {
+  CodexCatalogProviderOptions,
+  CodexListCustomPromptsResult,
+  CodexListSkillsResult,
   ProviderInterruptTurnInput,
   ProviderKind,
   ProviderRespondToRequestInput,
@@ -90,6 +93,22 @@ export interface ProviderServiceShape {
   readonly getCapabilities: (
     provider: ProviderKind,
   ) => Effect.Effect<ProviderAdapterCapabilities, ProviderServiceError>;
+
+  /**
+   * List Codex custom prompts available to the current client configuration.
+   */
+  readonly listCodexCustomPrompts: (input?: {
+    readonly providerOptions?: CodexCatalogProviderOptions;
+  }) => Effect.Effect<CodexListCustomPromptsResult, ProviderServiceError>;
+
+  /**
+   * List Codex skills for a target cwd.
+   */
+  readonly listCodexSkills: (input: {
+    readonly cwd: string;
+    readonly providerOptions?: CodexCatalogProviderOptions;
+    readonly forceReload?: boolean;
+  }) => Effect.Effect<CodexListSkillsResult, ProviderServiceError>;
 
   /**
    * Roll back provider conversation state by a number of turns.

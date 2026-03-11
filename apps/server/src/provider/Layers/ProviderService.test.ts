@@ -536,11 +536,18 @@ routing.layer("ProviderServiceLive routing", (it) => {
   it.effect("recovers stale sessions for sendTurn using persisted cwd", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
+      const providerOptions = {
+        codex: {
+          homePath: "/tmp/.codex-personal",
+          binaryPath: "/usr/local/bin/codex-personal",
+        },
+      };
 
       const initial = yield* provider.startSession(asThreadId("thread-1"), {
         provider: "codex",
         threadId: asThreadId("thread-1"),
         cwd: "/tmp/project-send-turn",
+        providerOptions,
         runtimeMode: "full-access",
       });
 
@@ -563,11 +570,13 @@ routing.layer("ProviderServiceLive routing", (it) => {
           cwd?: string;
           resumeCursor?: unknown;
           threadId?: string;
+          providerOptions?: unknown;
         };
         assert.equal(startPayload.provider, "codex");
         assert.equal(startPayload.cwd, "/tmp/project-send-turn");
         assert.deepEqual(startPayload.resumeCursor, initial.resumeCursor);
         assert.equal(startPayload.threadId, initial.threadId);
+        assert.deepEqual(startPayload.providerOptions, providerOptions);
       }
       assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
     }),
@@ -635,7 +644,6 @@ routing.layer("ProviderServiceLive routing", (it) => {
           assert.equal(runtimePayload.lastRuntimeEvent, "provider.sendTurn");
         }
       }
-
     }),
   );
 });

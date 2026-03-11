@@ -23,8 +23,9 @@ import {
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, PubSub, Queue, Schema, SchemaIssue, Stream } from "effect";
 
-import { ProviderValidationError } from "../Errors.ts";
+import { ProviderValidationError, type ProviderServiceError } from "../Errors.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
+import type { CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
   ProviderSessionDirectory,
@@ -141,9 +142,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
       Effect.succeed(event).pipe(
         Effect.tap((canonicalEvent) =>
-          canonicalEventLogger
-            ? canonicalEventLogger.write(canonicalEvent, null)
-            : Effect.void,
+          canonicalEventLogger ? canonicalEventLogger.write(canonicalEvent, null) : Effect.void,
         ),
         Effect.flatMap((canonicalEvent) => PubSub.publish(runtimeEventPubSub, canonicalEvent)),
         Effect.asVoid,
@@ -193,7 +192,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const hasActiveSession = yield* adapter.hasSession(input.binding.threadId);
         if (hasActiveSession) {
           const activeSessions = yield* adapter.listSessions();
-          const existing = activeSessions.find((session) => session.threadId === input.binding.threadId);
+          const existing = activeSessions.find(
+            (session) => session.threadId === input.binding.threadId,
+          );
           if (existing) {
             yield* upsertSessionBinding(existing, input.binding.threadId);
             yield* analytics.record("provider.session.recovered", {
@@ -292,7 +293,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         }
 
         yield* upsertSessionBinding(session, threadId, {
-          ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+          providerOptions: input.providerOptions,
         });
         yield* analytics.record("provider.session.started", {
           provider: session.provider,
@@ -425,23 +426,23 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const listSessions: ProviderServiceShape["listSessions"] = () =>
       Effect.gen(function* () {
-        const sessionsByProvider = yield* Effect.forEach(adapters, (adapter) => adapter.listSessions());
+        const sessionsByProvider = yield* Effect.forEach(adapters, (adapter) =>
+          adapter.listSessions(),
+        );
         const activeSessions = sessionsByProvider.flatMap((sessions) => sessions);
-        const persistedBindings = yield* directory
-          .listThreadIds()
-          .pipe(
-            Effect.flatMap((threadIds) =>
-              Effect.forEach(
-                threadIds,
-                (threadId) =>
-                  directory.getBinding(threadId).pipe(
-                    Effect.orElseSucceed(() => Option.none<ProviderRuntimeBinding>()),
-                  ),
-                { concurrency: "unbounded" },
-              ),
+        const persistedBindings = yield* directory.listThreadIds().pipe(
+          Effect.flatMap((threadIds) =>
+            Effect.forEach(
+              threadIds,
+              (threadId) =>
+                directory
+                  .getBinding(threadId)
+                  .pipe(Effect.orElseSucceed(() => Option.none<ProviderRuntimeBinding>())),
+              { concurrency: "unbounded" },
             ),
-            Effect.orElseSucceed(() => [] as Array<Option.Option<ProviderRuntimeBinding>>),
-          );
+          ),
+          Effect.orElseSucceed(() => [] as Array<Option.Option<ProviderRuntimeBinding>>),
+        );
         const bindingsByThreadId = new Map<ThreadId, ProviderRuntimeBinding>();
         for (const bindingOption of persistedBindings) {
           const binding = Option.getOrUndefined(bindingOption);
@@ -472,6 +473,24 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const getCapabilities: ProviderServiceShape["getCapabilities"] = (provider) =>
       registry.getByProvider(provider).pipe(Effect.map((adapter) => adapter.capabilities));
+
+    const listCodexCustomPrompts: ProviderServiceShape["listCodexCustomPrompts"] = (input) =>
+      Effect.gen(function* () {
+        const adapter = (yield* registry.getByProvider("codex")) as CodexAdapterShape;
+        return yield* adapter.listCustomPrompts(
+          input?.providerOptions ? { providerOptions: input.providerOptions } : undefined,
+        );
+      }).pipe(Effect.mapError((error): ProviderServiceError => error));
+
+    const listCodexSkills: ProviderServiceShape["listCodexSkills"] = (input) =>
+      Effect.gen(function* () {
+        const adapter = (yield* registry.getByProvider("codex")) as CodexAdapterShape;
+        return yield* adapter.listSkills({
+          cwd: input.cwd,
+          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+          ...(input.forceReload !== undefined ? { forceReload: input.forceReload } : {}),
+        });
+      }).pipe(Effect.mapError((error): ProviderServiceError => error));
 
     const rollbackConversation: ProviderServiceShape["rollbackConversation"] = (rawInput) =>
       Effect.gen(function* () {
@@ -536,8 +555,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       stopSession,
       listSessions,
       getCapabilities,
+      listCodexCustomPrompts,
+      listCodexSkills,
       rollbackConversation,
-      streamEvents: Stream.fromPubSub(runtimeEventPubSub),
+      // Each access creates a fresh PubSub subscription so that multiple
+      // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
+      // independently receive all runtime events.
+      get streamEvents(): ProviderServiceShape["streamEvents"] {
+        return Stream.fromPubSub(runtimeEventPubSub);
+      },
     } satisfies ProviderServiceShape;
   });
 

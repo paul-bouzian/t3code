@@ -1,11 +1,47 @@
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear() {
+      values.clear();
+    },
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    key(index) {
+      return Array.from(values.keys())[index] ?? null;
+    },
+    removeItem(key) {
+      values.delete(key);
+    },
+    setItem(key, value) {
+      values.set(key, value);
+    },
+  };
+}
+
+vi.hoisted(() => {
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: createMemoryStorage(),
+    writable: true,
+  });
+});
+
 import {
   type ComposerImageAttachment,
   createDebouncedStorage,
   useComposerDraftStore,
 } from "./composerDraftStore";
+
+beforeEach(() => {
+  globalThis.localStorage.clear();
+});
 
 function makeImage(input: {
   id: string;
@@ -156,6 +192,94 @@ describe("composerDraftStore clearComposerContent", () => {
     expect(draft).toBeUndefined();
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:optimistic");
   });
+
+  it("clears stored Codex skill selections alongside the prompt", () => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {
+        [threadId]: {
+          prompt: "Use $code-review",
+          images: [],
+          nonPersistedImageIds: [],
+          persistedAttachments: [],
+          skillSelections: [
+            {
+              name: "code-review",
+              path: "/tmp/code-review/SKILL.md",
+              rangeStart: 4,
+              rangeEnd: 16,
+            },
+          ],
+          provider: null,
+          model: null,
+          runtimeMode: null,
+          interactionMode: null,
+          effort: null,
+          codexFastMode: false,
+        },
+      },
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+
+    useComposerDraftStore.getState().clearComposerContent(threadId);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
+
+describe("composerDraftStore skillSelections", () => {
+  const threadId = ThreadId.makeUnsafe("thread-skills");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("drops stale skill bindings when the token is removed from the prompt", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadId, "Use $code-review now");
+    store.setSkillSelections(threadId, [
+      {
+        name: "code-review",
+        path: "/tmp/code-review/SKILL.md",
+        rangeStart: 4,
+        rangeEnd: 16,
+      },
+    ]);
+
+    store.setPrompt(threadId, "Use now");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.skillSelections).toEqual(
+      [],
+    );
+  });
+
+  it("shifts skill binding ranges when text is inserted before the token", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadId, "$code-review now");
+    store.setSkillSelections(threadId, [
+      {
+        name: "code-review",
+        path: "/tmp/code-review/SKILL.md",
+        rangeStart: 0,
+        rangeEnd: 12,
+      },
+    ]);
+
+    store.setPrompt(threadId, "Please $code-review now");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.skillSelections).toEqual([
+      {
+        name: "code-review",
+        path: "/tmp/code-review/SKILL.md",
+        rangeStart: 7,
+        rangeEnd: 19,
+      },
+    ]);
+  });
 });
 
 describe("composerDraftStore project draft thread mapping", () => {
@@ -252,9 +376,9 @@ describe("composerDraftStore project draft thread mapping", () => {
     store.clearProjectDraftThreadId(projectId);
 
     expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
-    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId)?.threadId).toBe(
-      threadId,
-    );
+    expect(
+      useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId)?.threadId,
+    ).toBe(threadId);
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe("keep me");
   });
 
@@ -380,7 +504,9 @@ describe("composerDraftStore setModel", () => {
 
     store.setModel(threadId, "gpt-5.3-codex");
 
-    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.model).toBe("gpt-5.3-codex");
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.model).toBe(
+      "gpt-5.3-codex",
+    );
   });
 });
 

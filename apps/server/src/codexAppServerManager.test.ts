@@ -14,6 +14,7 @@ import {
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
+  resolveCodexSpawnCommand,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
 
@@ -180,6 +181,20 @@ describe("normalizeCodexModelSlug", () => {
   it("keeps non-aliased models as-is", () => {
     expect(normalizeCodexModelSlug("gpt-5.2-codex")).toBe("gpt-5.2-codex");
     expect(normalizeCodexModelSlug("gpt-5.2")).toBe("gpt-5.2");
+  });
+});
+
+describe("resolveCodexSpawnCommand", () => {
+  it("quotes Windows binary paths that contain spaces", () => {
+    expect(resolveCodexSpawnCommand("C:\\Program Files\\Codex\\codex.exe", "win32")).toBe(
+      '"C:\\Program Files\\Codex\\codex.exe"',
+    );
+  });
+
+  it("keeps binary paths unchanged on other platforms", () => {
+    expect(resolveCodexSpawnCommand("/usr/local/bin/codex", "darwin")).toBe(
+      "/usr/local/bin/codex",
+    );
   });
 });
 
@@ -746,91 +761,124 @@ describe("respondToUserInput", () => {
     expect(request?.requestKind).toBe("file-read");
     expect(request?.method).toBe("item/fileRead/requestApproval");
   });
+
+  it("rejects probe responses when an error object is present without a message", () => {
+    const manager = new CodexAppServerManager();
+    const reject = vi.fn();
+    const resolve = vi.fn();
+    const timeout = setTimeout(() => {}, 60_000);
+    const context = {
+      pending: new Map([
+        [
+          "42",
+          {
+            method: "skills/list",
+            timeout,
+            resolve,
+            reject,
+          },
+        ],
+      ]),
+    };
+
+    (
+      manager as unknown as {
+        handleProbeResponse: (
+          context: { pending: Map<string, unknown> },
+          response: Record<string, unknown>,
+        ) => void;
+      }
+    ).handleProbeResponse(context, {
+      id: 42,
+      error: {
+        code: -32000,
+      },
+    });
+
+    clearTimeout(timeout);
+    expect(reject).toHaveBeenCalledWith(new Error("skills/list failed."));
+    expect(resolve).not.toHaveBeenCalled();
+    expect(context.pending.size).toBe(0);
+  });
 });
 
 describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume", () => {
-  it(
-    "keeps prior thread history when resuming with a changed runtime mode",
-    async () => {
-      const workspaceDir = mkdtempSync(path.join(os.tmpdir(), "codex-live-resume-"));
-      writeFileSync(path.join(workspaceDir, "README.md"), "hello\n", "utf8");
+  it("keeps prior thread history when resuming with a changed runtime mode", async () => {
+    const workspaceDir = mkdtempSync(path.join(os.tmpdir(), "codex-live-resume-"));
+    writeFileSync(path.join(workspaceDir, "README.md"), "hello\n", "utf8");
 
-      const manager = new CodexAppServerManager();
+    const manager = new CodexAppServerManager();
 
-      try {
-        const firstSession = await manager.startSession({
-          threadId: asThreadId("thread-live"),
-          provider: "codex",
-          cwd: workspaceDir,
-          runtimeMode: "full-access",
-          providerOptions: {
-            codex: {
-              ...(process.env.CODEX_BINARY_PATH
-                ? { binaryPath: process.env.CODEX_BINARY_PATH }
-                : {}),
-              ...(process.env.CODEX_HOME_PATH
-                ? { homePath: process.env.CODEX_HOME_PATH }
-                : {}),
-            },
+    try {
+      const firstSession = await manager.startSession({
+        threadId: asThreadId("thread-live"),
+        provider: "codex",
+        cwd: workspaceDir,
+        runtimeMode: "full-access",
+        providerOptions: {
+          codex: {
+            ...(process.env.CODEX_BINARY_PATH ? { binaryPath: process.env.CODEX_BINARY_PATH } : {}),
+            ...(process.env.CODEX_HOME_PATH ? { homePath: process.env.CODEX_HOME_PATH } : {}),
           },
-        });
+        },
+      });
 
-        const firstTurn = await manager.sendTurn({
-          threadId: firstSession.threadId,
-          input: `Reply with exactly the word ALPHA ${randomUUID()}`,
-        });
+      const firstTurn = await manager.sendTurn({
+        threadId: firstSession.threadId,
+        input: `Reply with exactly the word ALPHA ${randomUUID()}`,
+      });
 
-        expect(firstTurn.threadId).toBe(firstSession.threadId);
+      expect(firstTurn.threadId).toBe(firstSession.threadId);
 
-        await vi.waitFor(async () => {
+      await vi.waitFor(
+        async () => {
           const snapshot = await manager.readThread(firstSession.threadId);
           expect(snapshot.turns.length).toBeGreaterThan(0);
-        }, { timeout: 120_000, interval: 1_000 });
+        },
+        { timeout: 120_000, interval: 1_000 },
+      );
 
-        const firstSnapshot = await manager.readThread(firstSession.threadId);
-        const originalThreadId = firstSnapshot.threadId;
-        const originalTurnCount = firstSnapshot.turns.length;
+      const firstSnapshot = await manager.readThread(firstSession.threadId);
+      const originalThreadId = firstSnapshot.threadId;
+      const originalTurnCount = firstSnapshot.turns.length;
 
-        manager.stopSession(firstSession.threadId);
+      manager.stopSession(firstSession.threadId);
 
-        const resumedSession = await manager.startSession({
-          threadId: firstSession.threadId,
-          provider: "codex",
-          cwd: workspaceDir,
-          runtimeMode: "approval-required",
-          resumeCursor: firstSession.resumeCursor,
-          providerOptions: {
-            codex: {
-              ...(process.env.CODEX_BINARY_PATH
-                ? { binaryPath: process.env.CODEX_BINARY_PATH }
-                : {}),
-              ...(process.env.CODEX_HOME_PATH
-                ? { homePath: process.env.CODEX_HOME_PATH }
-                : {}),
-            },
+      const resumedSession = await manager.startSession({
+        threadId: firstSession.threadId,
+        provider: "codex",
+        cwd: workspaceDir,
+        runtimeMode: "approval-required",
+        resumeCursor: firstSession.resumeCursor,
+        providerOptions: {
+          codex: {
+            ...(process.env.CODEX_BINARY_PATH ? { binaryPath: process.env.CODEX_BINARY_PATH } : {}),
+            ...(process.env.CODEX_HOME_PATH ? { homePath: process.env.CODEX_HOME_PATH } : {}),
           },
-        });
+        },
+      });
 
-        expect(resumedSession.threadId).toBe(originalThreadId);
+      expect(resumedSession.threadId).toBe(originalThreadId);
 
-        const resumedSnapshotBeforeTurn = await manager.readThread(resumedSession.threadId);
-        expect(resumedSnapshotBeforeTurn.threadId).toBe(originalThreadId);
-        expect(resumedSnapshotBeforeTurn.turns.length).toBeGreaterThanOrEqual(originalTurnCount);
+      const resumedSnapshotBeforeTurn = await manager.readThread(resumedSession.threadId);
+      expect(resumedSnapshotBeforeTurn.threadId).toBe(originalThreadId);
+      expect(resumedSnapshotBeforeTurn.turns.length).toBeGreaterThanOrEqual(originalTurnCount);
 
-        await manager.sendTurn({
-          threadId: resumedSession.threadId,
-          input: `Reply with exactly the word BETA ${randomUUID()}`,
-        });
+      await manager.sendTurn({
+        threadId: resumedSession.threadId,
+        input: `Reply with exactly the word BETA ${randomUUID()}`,
+      });
 
-        await vi.waitFor(async () => {
+      await vi.waitFor(
+        async () => {
           const snapshot = await manager.readThread(resumedSession.threadId);
           expect(snapshot.turns.length).toBeGreaterThan(originalTurnCount);
-        }, { timeout: 120_000, interval: 1_000 });
-      } finally {
-        manager.stopAll();
-        rmSync(workspaceDir, { recursive: true, force: true });
-      }
-    },
-    180_000,
-  );
+        },
+        { timeout: 120_000, interval: 1_000 },
+      );
+    } finally {
+      manager.stopAll();
+      rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  }, 180_000);
 });

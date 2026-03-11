@@ -38,6 +38,7 @@ import {
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import { listCodexCustomPrompts } from "../codexCatalog.ts";
 
 const PROVIDER = "codex" as const;
 
@@ -403,7 +404,9 @@ function asRuntimeTaskId(taskId: string): RuntimeTaskId {
   return RuntimeTaskId.makeUnsafe(taskId);
 }
 
-function codexEventMessage(payload: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+function codexEventMessage(
+  payload: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
   return asObject(payload?.msg);
 }
 
@@ -1037,7 +1040,9 @@ function mapToRuntimeEvents(
         type: "content.delta",
         payload: {
           streamKind:
-            asNumber(msg?.summary_index) !== undefined ? "reasoning_summary_text" : "reasoning_text",
+            asNumber(msg?.summary_index) !== undefined
+              ? "reasoning_summary_text"
+              : "reasoning_text",
           delta,
           ...(asNumber(msg?.summary_index) !== undefined
             ? { summaryIndex: asNumber(msg?.summary_index) }
@@ -1192,13 +1197,14 @@ function mapToRuntimeEvents(
   if (event.method === "error") {
     const message =
       asString(asObject(payload?.error)?.message) ?? event.message ?? "Provider runtime error";
+    const willRetry = payload?.willRetry === true;
     return [
       {
-        type: "runtime.error",
+        type: willRetry ? "runtime.warning" : "runtime.error",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
           message,
-          class: "provider_error",
+          ...(!willRetry ? { class: "provider_error" as const } : {}),
           ...(event.payload !== undefined ? { detail: event.payload } : {}),
         },
       },
@@ -1313,9 +1319,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             detail: toMessage(cause, "Failed to start Codex adapter session."),
             cause,
           }),
-      }).pipe(
-        Effect.map((session) => session),
-      );
+      }).pipe(Effect.map((session) => session));
     };
 
     const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>
@@ -1335,11 +1339,17 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
                   new Error(`Invalid attachment id '${attachment.id}'.`),
                 );
               }
-              const bytes = yield* fileSystem
-                .readFile(attachmentPath)
-                .pipe(
-                  Effect.mapError((cause) => toRequestError(input.threadId, "turn/start", cause)),
-                );
+              const bytes = yield* fileSystem.readFile(attachmentPath).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderAdapterRequestError({
+                      provider: PROVIDER,
+                      method: "turn/start",
+                      detail: toMessage(cause, "Failed to read attachment file."),
+                      cause,
+                    }),
+                ),
+              );
               return {
                 type: "image" as const,
                 url: `data:${attachment.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
@@ -1353,6 +1363,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             const managerInput = {
               threadId: input.threadId,
               ...(input.input !== undefined ? { input: input.input } : {}),
+              ...(input.skillSelections !== undefined
+                ? { skillSelections: input.skillSelections }
+                : {}),
               ...(input.model !== undefined ? { model: input.model } : {}),
               ...(input.modelOptions?.codex?.reasoningEffort !== undefined
                 ? { effort: input.modelOptions.codex.reasoningEffort }
@@ -1372,6 +1385,38 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             threadId: input.threadId,
           })),
         );
+      });
+
+    const listCustomPrompts: CodexAdapterShape["listCustomPrompts"] = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          listCodexCustomPrompts(
+            input?.providerOptions ? { providerOptions: input.providerOptions } : undefined,
+          ),
+        catch: (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: ThreadId.makeUnsafe("codex-catalog"),
+            detail: toMessage(cause, "Failed to list Codex custom prompts."),
+            cause,
+          }),
+      });
+
+    const listSkills: CodexAdapterShape["listSkills"] = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          manager.listSkills({
+            cwd: input.cwd,
+            ...(input.providerOptions ? { providerOptions: { codex: input.providerOptions } } : {}),
+            ...(input.forceReload !== undefined ? { forceReload: input.forceReload } : {}),
+          }),
+        catch: (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: ThreadId.makeUnsafe("codex-catalog"),
+            detail: toMessage(cause, "Failed to list Codex skills."),
+            cause,
+          }),
       });
 
     const interruptTurn: CodexAdapterShape["interruptTurn"] = (threadId, turnId) =>
@@ -1496,6 +1541,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       },
       startSession,
       sendTurn,
+      listCustomPrompts,
+      listSkills,
       interruptTurn,
       readThread,
       rollbackThread,
