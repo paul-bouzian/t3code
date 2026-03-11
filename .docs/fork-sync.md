@@ -1,19 +1,14 @@
 # Fork Sync
 
-This repository currently uses:
+This repository now uses the standard remote layout:
 
-- `origin` for the upstream project: `https://github.com/pingdotgg/t3code.git`
-- `fork` for your personal fork: `https://github.com/paul-bouzian/t3code.git`
-
-That naming is workable, but it means you should treat:
-
-- `origin/main` as the upstream branch you consume
-- `fork/main` as the branch you publish and keep custom
+- `origin` for your personal fork: `https://github.com/paul-bouzian/t3code.git`
+- `upstream` for the source project: `https://github.com/pingdotgg/t3code.git`
 
 ## Recommended model
 
-- Keep `fork/main` as the single integration branch for your fork.
-- Keep each personal feature on its own branch until it is ready to land in `fork/main`.
+- Keep `origin/main` as the single integration branch for your fork.
+- Keep each personal feature on its own branch until it is ready to land in `origin/main`.
 - Pull upstream changes through short-lived sync branches, not directly on `main`.
 - Adopt interesting third-party PRs with `cherry-pick -x`, not by merging contributor branches.
 
@@ -24,13 +19,13 @@ This keeps one canonical branch with your custom behavior while making every ups
 Run this once on your machine:
 
 ```bash
-git fetch origin fork --prune
+git fetch --all --prune
 git config rerere.enabled true
 git config rerere.autoupdate true
 
-# Recommended: local main should follow your fork, not upstream.
+# Local main should follow your fork.
 git switch main
-git branch --set-upstream-to=fork/main main
+git branch --set-upstream-to=origin/main main
 ```
 
 `rerere` is worth enabling because repeated conflicts tend to happen in the same places when your fork carries long-lived changes.
@@ -40,8 +35,8 @@ git branch --set-upstream-to=fork/main main
 Before every sync, see what your fork is carrying relative to upstream:
 
 ```bash
-git fetch origin fork --prune
-git log --left-right --cherry-pick --oneline origin/main...fork/main
+git fetch --all --prune
+git log --left-right --cherry-pick --oneline upstream/main...origin/main
 ```
 
 Commits prefixed with `>` are fork-only commits you are still carrying.
@@ -51,13 +46,13 @@ Commits prefixed with `>` are fork-only commits you are still carrying.
 Prefer doing sync work in a separate worktree so you do not disturb your active branch.
 
 ```bash
-git fetch origin fork --prune
+git fetch --all --prune
 
 SYNC_BRANCH="sync/$(date +%Y-%m-%d)-upstream-main"
-git worktree add -b "$SYNC_BRANCH" ../t3code-sync fork/main
+git worktree add -b "$SYNC_BRANCH" ../t3code-sync origin/main
 cd ../t3code-sync
 
-git merge --no-ff origin/main
+git merge --no-ff upstream/main
 bun lint
 bun typecheck
 ```
@@ -65,13 +60,13 @@ bun typecheck
 If the merge is clean and validation passes, push the sync branch to your fork and review it before landing:
 
 ```bash
-git push -u fork "$SYNC_BRANCH"
+git push -u origin "$SYNC_BRANCH"
 gh pr create \
   --repo paul-bouzian/t3code \
   --base main \
   --head "$SYNC_BRANCH" \
   --title "merge upstream main into fork" \
-  --body "Why\n- pull latest upstream fixes and features into the personal fork\n\nHow\n- merge origin/main into fork/main on a dedicated sync branch\n- preserve fork-only behavior where conflicts exist\n\nTests\n- bun lint\n- bun typecheck"
+  --body "Why\n- pull latest upstream fixes and features into the personal fork\n\nHow\n- merge upstream/main into origin/main on a dedicated sync branch\n- preserve fork-only behavior where conflicts exist\n\nTests\n- bun lint\n- bun typecheck"
 ```
 
 If you do not want a PR, you can still keep the same branch-based review flow and fast-forward your fork after manual review.
@@ -95,35 +90,35 @@ If there is a GitHub PR you want before upstream merges it, treat it like vendor
 PR_NUMBER=123
 VENDOR_BRANCH="vendor/pr-${PR_NUMBER}"
 
-git fetch origin fork --prune
-git switch -c "$VENDOR_BRANCH" fork/main
+git fetch --all --prune
+git switch -c "$VENDOR_BRANCH" origin/main
 
 gh pr view "$PR_NUMBER" \
   --repo pingdotgg/t3code \
   --json title,url,author,commits,files
 
-git fetch origin pull/"$PR_NUMBER"/head:pr/"$PR_NUMBER"
-git log --oneline pr/"$PR_NUMBER" --not origin/main
+git fetch upstream pull/"$PR_NUMBER"/head:pr/"$PR_NUMBER"
+git log --oneline pr/"$PR_NUMBER" --not upstream/main
 
 # Cherry-pick the exact commits you want, not blindly the whole branch.
 git cherry-pick -x <commit-sha>
 
 bun lint
 bun typecheck
-git push -u fork "$VENDOR_BRANCH"
+git push -u origin "$VENDOR_BRANCH"
 ```
 
 Notes:
 
 - `-x` records the original commit SHA in the new commit message, which makes later cleanup much easier.
-- If you are already doing an upstream sync, cherry-pick the PR onto the sync branch after merging `origin/main`. That usually reduces conflicts.
+- If you are already doing an upstream sync, cherry-pick the PR onto the sync branch after merging `upstream/main`. That usually reduces conflicts.
 - If the PR author keeps force-pushing, refetch the PR head and review the new commits before picking them.
 
 ## When upstream eventually merges the same idea
 
 When upstream ships an equivalent version of one of your personal features:
 
-1. Sync from `origin/main`.
+1. Sync from `upstream/main`.
 2. Compare the upstream implementation to your carried commits.
 3. Drop your fork-only copy if the upstream version is good enough.
 4. Keep only the remaining delta that is still truly custom.
