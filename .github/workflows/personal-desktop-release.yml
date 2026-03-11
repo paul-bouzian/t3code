@@ -1,0 +1,116 @@
+name: Personal Desktop Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Typecheck
+        run: bun run typecheck
+
+  release:
+    name: Build And Publish Personal macOS arm64 Release
+    needs: preflight
+    runs-on: macos-14
+    env:
+      T3CODE_DESKTOP_UPDATE_REPOSITORY: paul-bouzian/t3code
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - id: release_meta
+        name: Resolve personal release version
+        shell: bash
+        run: |
+          patch="$(printf '%d%02d' "${GITHUB_RUN_NUMBER}" "${GITHUB_RUN_ATTEMPT}")"
+          version="0.0.${patch}"
+          tag="v${version}"
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Build macOS arm64 artifact
+        shell: bash
+        run: |
+          bun run dist:desktop:artifact -- \
+            --platform mac \
+            --target dmg \
+            --arch arm64 \
+            --build-version "${{ steps.release_meta.outputs.version }}" \
+            --verbose
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+
+          shopt -s nullglob
+          for pattern in \
+            "release/*.dmg" \
+            "release/*.zip" \
+            "release/*.blockmap" \
+            "release/latest-mac.yml"; do
+            for file in $pattern; do
+              cp "$file" release-publish/
+            done
+          done
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: Personal T3 Code v${{ steps.release_meta.outputs.version }}
+          generate_release_notes: false
+          prerelease: false
+          make_latest: true
+          files: |
+            release-publish/*.dmg
+            release-publish/*.zip
+            release-publish/*.blockmap
+            release-publish/latest-mac.yml
+          fail_on_unmatched_files: true
