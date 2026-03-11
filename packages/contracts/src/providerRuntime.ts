@@ -487,8 +487,29 @@ const AccountUpdatedPayload = Schema.Struct({
 });
 export type AccountUpdatedPayload = typeof AccountUpdatedPayload.Type;
 
+export const ProviderRateLimitWindow = Schema.Struct({
+  usedPercent: Schema.optional(Schema.Number),
+  windowDurationMins: Schema.optional(Schema.Number),
+  resetsAt: Schema.optional(Schema.Number),
+});
+export type ProviderRateLimitWindow = typeof ProviderRateLimitWindow.Type;
+
+export const ProviderRateLimitBucket = Schema.Struct({
+  limitId: Schema.optional(TrimmedNonEmptyStringSchema),
+  limitName: Schema.optional(Schema.NullOr(Schema.String)),
+  primary: Schema.optional(Schema.NullOr(ProviderRateLimitWindow)),
+  secondary: Schema.optional(Schema.NullOr(ProviderRateLimitWindow)),
+});
+export type ProviderRateLimitBucket = typeof ProviderRateLimitBucket.Type;
+
+export const ProviderRateLimits = Schema.Struct({
+  rateLimits: Schema.optional(ProviderRateLimitBucket),
+  rateLimitsByLimitId: Schema.optional(Schema.Record(Schema.String, ProviderRateLimitBucket)),
+});
+export type ProviderRateLimits = typeof ProviderRateLimits.Type;
+
 const AccountRateLimitsUpdatedPayload = Schema.Struct({
-  rateLimits: Schema.Unknown,
+  rateLimits: ProviderRateLimits,
 });
 export type AccountRateLimitsUpdatedPayload = typeof AccountRateLimitsUpdatedPayload.Type;
 

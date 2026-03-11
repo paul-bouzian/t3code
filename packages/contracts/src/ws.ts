@@ -11,6 +11,7 @@ import {
   OrchestrationGetSnapshotInput,
   OrchestrationGetTurnDiffInput,
   OrchestrationReplayEventsInput,
+  ProviderKind,
 } from "./orchestration";
 import {
   GitCheckoutInput,
@@ -38,6 +39,7 @@ import { KeybindingRule } from "./keybindings";
 import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
 import { OpenInEditorInput } from "./editor";
 import { ServerConfigUpdatedPayload } from "./server";
+import { ProviderRateLimits } from "./providerRuntime";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -88,6 +90,7 @@ export const WS_CHANNELS = {
   terminalEvent: "terminal.event",
   serverWelcome: "server.welcome",
   serverConfigUpdated: "server.configUpdated",
+  providerRateLimitsUpdated: "provider.rateLimitsUpdated",
 } as const;
 
 // -- Tagged Union of all request body schemas ─────────────────────────
@@ -170,11 +173,19 @@ export type WebSocketResponse = typeof WebSocketResponse.Type;
 export const WsPushSequence = NonNegativeInt;
 export type WsPushSequence = typeof WsPushSequence.Type;
 
+export const ProviderRateLimitsUpdatedPayload = Schema.Struct({
+  provider: ProviderKind,
+  threadId: ThreadId,
+  rateLimits: ProviderRateLimits,
+});
+export type ProviderRateLimitsUpdatedPayload = typeof ProviderRateLimitsUpdatedPayload.Type;
+
 export const WsWelcomePayload = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   projectName: TrimmedNonEmptyString,
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),
+  providerRateLimitsSnapshots: Schema.optional(Schema.Array(ProviderRateLimitsUpdatedPayload)),
 });
 export type WsWelcomePayload = typeof WsWelcomePayload.Type;
 
@@ -182,6 +193,7 @@ export interface WsPushPayloadByChannel {
   readonly [WS_CHANNELS.serverWelcome]: WsWelcomePayload;
   readonly [WS_CHANNELS.serverConfigUpdated]: typeof ServerConfigUpdatedPayload.Type;
   readonly [WS_CHANNELS.terminalEvent]: typeof TerminalEvent.Type;
+  readonly [WS_CHANNELS.providerRateLimitsUpdated]: ProviderRateLimitsUpdatedPayload;
   readonly [ORCHESTRATION_WS_CHANNELS.domainEvent]: OrchestrationEvent;
 }
 
@@ -205,6 +217,10 @@ export const WsPushServerConfigUpdated = makeWsPushSchema(
   ServerConfigUpdatedPayload,
 );
 export const WsPushTerminalEvent = makeWsPushSchema(WS_CHANNELS.terminalEvent, TerminalEvent);
+export const WsPushProviderRateLimitsUpdated = makeWsPushSchema(
+  WS_CHANNELS.providerRateLimitsUpdated,
+  ProviderRateLimitsUpdatedPayload,
+);
 export const WsPushOrchestrationDomainEvent = makeWsPushSchema(
   ORCHESTRATION_WS_CHANNELS.domainEvent,
   OrchestrationEvent,
@@ -214,6 +230,7 @@ export const WsPushChannelSchema = Schema.Literals([
   WS_CHANNELS.serverWelcome,
   WS_CHANNELS.serverConfigUpdated,
   WS_CHANNELS.terminalEvent,
+  WS_CHANNELS.providerRateLimitsUpdated,
   ORCHESTRATION_WS_CHANNELS.domainEvent,
 ]);
 export type WsPushChannelSchema = typeof WsPushChannelSchema.Type;
@@ -222,6 +239,7 @@ export const WsPush = Schema.Union([
   WsPushServerWelcome,
   WsPushServerConfigUpdated,
   WsPushTerminalEvent,
+  WsPushProviderRateLimitsUpdated,
   WsPushOrchestrationDomainEvent,
 ]);
 export type WsPush = typeof WsPush.Type;

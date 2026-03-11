@@ -586,6 +586,7 @@ describe("WebSocket Server", () => {
     expect(welcome.data).toEqual({
       cwd: "/test/project",
       projectName: "project",
+      providerRateLimitsSnapshots: [],
     });
   });
 
@@ -1463,6 +1464,101 @@ describe("WebSocket Server", () => {
     expect(domainEvent.type).toBe("thread.message-sent");
     expect(domainEvent.payload.messageId).toBe("assistant:item-1");
     expect(domainEvent.payload.text).toBe("hello from runtime");
+  });
+
+  it("bootstraps and broadcasts provider rate-limit snapshots by thread", async () => {
+    const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
+    const emitRuntimeEvent = (event: ProviderRuntimeEvent) => {
+      Effect.runSync(PubSub.publish(runtimeEventPubSub, event));
+    };
+    const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+    const providerService: ProviderServiceShape = {
+      startSession: () => unsupported(),
+      sendTurn: () => unsupported(),
+      interruptTurn: () => unsupported(),
+      respondToRequest: () => unsupported(),
+      respondToUserInput: () => unsupported(),
+      stopSession: () => unsupported(),
+      listSessions: () => Effect.succeed([]),
+      getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      listCodexCustomPrompts: () => Effect.succeed({ prompts: [] }),
+      listCodexSkills: () => Effect.succeed({ skills: [], errors: [] }),
+      rollbackConversation: () => unsupported(),
+      streamEvents: Stream.fromPubSub(runtimeEventPubSub),
+    };
+
+    server = await createTestServer({
+      cwd: "/test",
+      providerLayer: Layer.succeed(ProviderService, providerService),
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [firstWs] = await connectAndAwaitWelcome(port);
+    connections.push(firstWs);
+
+    emitRuntimeEvent({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-rate-limits-1"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      payload: {
+        rateLimits: {
+          rateLimits: {
+            primary: {
+              usedPercent: 12,
+              windowDurationMins: 300,
+              resetsAt: 1_900_000_000,
+            },
+          },
+        },
+      },
+    } as ProviderRuntimeEvent);
+
+    const livePush = await waitForPush(firstWs, WS_CHANNELS.providerRateLimitsUpdated);
+    expect(livePush.data).toEqual(
+      expect.objectContaining({
+        provider: "codex",
+        threadId: "thread-1",
+      }),
+    );
+
+    const [secondWs, welcome] = await connectAndAwaitWelcome(port);
+    connections.push(secondWs);
+
+    expect(welcome.data.providerRateLimitsSnapshots).toEqual([
+      expect.objectContaining({
+        provider: "codex",
+        threadId: "thread-1",
+      }),
+    ]);
+
+    emitRuntimeEvent({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-rate-limits-2"),
+      provider: "codex",
+      threadId: asThreadId("thread-2"),
+      createdAt: new Date().toISOString(),
+      payload: {
+        rateLimits: {
+          rateLimits: {
+            primary: {
+              usedPercent: 55,
+              windowDurationMins: 10_080,
+              resetsAt: 1_900_000_100,
+            },
+          },
+        },
+      },
+    } as ProviderRuntimeEvent);
+
+    const secondLivePush = await waitForPush(
+      secondWs,
+      WS_CHANNELS.providerRateLimitsUpdated,
+      (push) => push.data.threadId === "thread-2",
+    );
+    expect(secondLivePush.data.rateLimits.rateLimits?.primary?.usedPercent).toBe(55);
   });
 
   it("routes terminal RPC methods and broadcasts terminal events", async () => {

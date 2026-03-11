@@ -644,6 +644,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       } catch (error) {
         console.log("codex account/read failed", error);
       }
+      this.fetchAndEmitRateLimits(context);
 
       const normalizedModel = resolveCodexModelForAccount(
         normalizeCodexModelSlug(input.model),
@@ -1287,7 +1288,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     if (response.error) {
       const detail = response.error.message?.trim();
-      pending.reject(new Error(detail ? `${pending.method} failed: ${detail}` : `${pending.method} failed.`));
+      pending.reject(
+        new Error(detail ? `${pending.method} failed: ${detail}` : `${pending.method} failed.`),
+      );
       return;
     }
 
@@ -1453,6 +1456,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         activeTurnId: undefined,
         lastError: errorMessage ?? context.session.lastError,
       });
+      this.fetchAndEmitRateLimits(context);
       return;
     }
 
@@ -1593,6 +1597,24 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     context.child.stdin.write(`${encoded}\n`);
+  }
+
+  private fetchAndEmitRateLimits(context: CodexSessionContext): void {
+    this.sendRequest(context, "account/rateLimits/read", {})
+      .then((rateLimitsResponse) => {
+        this.emitEvent({
+          id: EventId.makeUnsafe(randomUUID()),
+          kind: "notification",
+          provider: "codex",
+          threadId: context.session.threadId,
+          createdAt: new Date().toISOString(),
+          method: "account/rateLimits/updated",
+          payload: rateLimitsResponse,
+        });
+      })
+      .catch(() => {
+        // Rate limits may not be available for every auth mode.
+      });
   }
 
   private emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void {
@@ -1845,7 +1867,13 @@ function readCodexSkillsListResponse(
       const path = asString(skill?.path);
       const scope = asString(skill?.scope);
       const enabled = typeof skill?.enabled === "boolean" ? skill.enabled : undefined;
-      if (!name || description === undefined || !path || !isCodexSkillScope(scope) || enabled === undefined) {
+      if (
+        !name ||
+        description === undefined ||
+        !path ||
+        !isCodexSkillScope(scope) ||
+        enabled === undefined
+      ) {
         return [];
       }
       const rawInterface = asObject(skill?.interface);
@@ -1921,7 +1949,9 @@ function readNullableString(
   return typeof candidate === "string" ? candidate : undefined;
 }
 
-function isCodexSkillScope(value: string | undefined): value is "user" | "repo" | "system" | "admin" {
+function isCodexSkillScope(
+  value: string | undefined,
+): value is "user" | "repo" | "system" | "admin" {
   return value === "user" || value === "repo" || value === "system" || value === "admin";
 }
 

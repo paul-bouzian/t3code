@@ -15,11 +15,13 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ClientOrchestrationCommand,
   type OrchestrationCommand,
+  type ProviderRuntimeEvent,
   ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   ProjectId,
   ThreadId,
+  type ProviderRateLimitsUpdatedPayload,
   WS_CHANNELS,
   WS_METHODS,
   WebSocketRequest,
@@ -202,6 +204,12 @@ function stripRequestTag<T extends { _tag: string }>(body: T) {
 const encodeWsResponse = Schema.encodeEffect(Schema.fromJsonString(WsResponse));
 const decodeWebSocketRequest = decodeJsonResult(WebSocketRequest);
 
+function isAccountRateLimitsUpdatedEvent(
+  event: ProviderRuntimeEvent,
+): event is Extract<ProviderRuntimeEvent, { type: "account.rate-limits.updated" }> {
+  return event.type === "account.rate-limits.updated";
+}
+
 export type ServerCoreRuntimeServices =
   | OrchestrationEngineService
   | ProjectionSnapshotQuery
@@ -272,6 +280,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const providerStatuses = yield* providerHealth.getStatuses;
 
   const clients = yield* Ref.make(new Set<WebSocket>());
+  const providerRateLimitsByThreadId = yield* Ref.make(
+    new Map<ThreadId, ProviderRateLimitsUpdatedPayload>(),
+  );
   const logger = createLogger("ws");
   const readiness = yield* makeServerReadiness;
 
@@ -617,6 +628,24 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       issues: event.issues,
       providers: providerStatuses,
     }),
+  ).pipe(Effect.forkIn(subscriptionsScope));
+
+  yield* Stream.runForEach(
+    Stream.filter(providerService.streamEvents, isAccountRateLimitsUpdatedEvent),
+    (event) => {
+      const snapshot: ProviderRateLimitsUpdatedPayload = {
+        provider: event.provider,
+        threadId: event.threadId,
+        rateLimits: event.payload.rateLimits,
+      };
+      return Ref.update(providerRateLimitsByThreadId, (current) => {
+        const next = new Map(current);
+        next.set(snapshot.threadId, snapshot);
+        return next;
+      }).pipe(
+        Effect.flatMap(() => pushBus.publishAll(WS_CHANNELS.providerRateLimitsUpdated, snapshot)),
+      );
+    },
   ).pipe(Effect.forkIn(subscriptionsScope));
 
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
@@ -973,18 +1002,23 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   wss.on("connection", (ws) => {
     const segments = cwd.split(/[/\\]/).filter(Boolean);
     const projectName = segments[segments.length - 1] ?? "project";
-
-    const welcomeData = {
-      cwd,
-      projectName,
-      ...(welcomeBootstrapProjectId ? { bootstrapProjectId: welcomeBootstrapProjectId } : {}),
-      ...(welcomeBootstrapThreadId ? { bootstrapThreadId: welcomeBootstrapThreadId } : {}),
-    };
     // Send welcome before adding to broadcast set so publishAll calls
     // cannot reach this client before the welcome arrives.
     void runPromise(
-      readiness.awaitServerReady.pipe(
-        Effect.flatMap(() => pushBus.publishClient(ws, WS_CHANNELS.serverWelcome, welcomeData)),
+      Effect.gen(function* () {
+        yield* readiness.awaitServerReady;
+        const providerRateLimitsSnapshots = Array.from(
+          (yield* Ref.get(providerRateLimitsByThreadId)).values(),
+        );
+        const welcomeData = {
+          cwd,
+          projectName,
+          ...(welcomeBootstrapProjectId ? { bootstrapProjectId: welcomeBootstrapProjectId } : {}),
+          ...(welcomeBootstrapThreadId ? { bootstrapThreadId: welcomeBootstrapThreadId } : {}),
+          providerRateLimitsSnapshots,
+        };
+        return yield* pushBus.publishClient(ws, WS_CHANNELS.serverWelcome, welcomeData);
+      }).pipe(
         Effect.flatMap((delivered) =>
           delivered ? Ref.update(clients, (clients) => clients.add(ws)) : Effect.void,
         ),

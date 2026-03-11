@@ -3,6 +3,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   type ContextMenuItem,
   type NativeApi,
+  type ProviderRateLimitsUpdatedPayload,
   ServerConfigUpdatedPayload,
   WS_CHANNELS,
   WS_METHODS,
@@ -15,6 +16,7 @@ import { WsTransport } from "./wsTransport";
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
 const serverConfigUpdatedListeners = new Set<(payload: ServerConfigUpdatedPayload) => void>();
+const rateLimitsUpdatedListeners = new Set<(payload: ProviderRateLimitsUpdatedPayload) => void>();
 
 /**
  * Subscribe to the server welcome message. If a welcome was already received
@@ -62,6 +64,26 @@ export function onServerConfigUpdated(
   };
 }
 
+export function onRateLimitsUpdated(
+  listener: (payload: ProviderRateLimitsUpdatedPayload) => void,
+): () => void {
+  rateLimitsUpdatedListeners.add(listener);
+
+  const latest =
+    instance?.transport.getLatestPush(WS_CHANNELS.providerRateLimitsUpdated)?.data ?? null;
+  if (latest) {
+    try {
+      listener(latest);
+    } catch {
+      // Swallow listener errors
+    }
+  }
+
+  return () => {
+    rateLimitsUpdatedListeners.delete(listener);
+  };
+}
+
 export function createWsNativeApi(): NativeApi {
   if (instance) return instance.api;
 
@@ -80,6 +102,16 @@ export function createWsNativeApi(): NativeApi {
   transport.subscribe(WS_CHANNELS.serverConfigUpdated, (message) => {
     const payload = message.data;
     for (const listener of serverConfigUpdatedListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
+  transport.subscribe(WS_CHANNELS.providerRateLimitsUpdated, (message) => {
+    const payload = message.data;
+    for (const listener of rateLimitsUpdatedListeners) {
       try {
         listener(payload);
       } catch {

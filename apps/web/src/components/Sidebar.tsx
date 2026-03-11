@@ -84,6 +84,8 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
 import { resolveThreadStatusPill, shouldClearThreadSelectionOnMouseDown } from "./Sidebar.logic";
+import { WeeklyLimitPill } from "./WeeklyLimitPill";
+import { useRateLimits } from "../rateLimitsStore";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -280,6 +282,10 @@ export default function Sidebar() {
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
+  const activeThreadRateLimits = useRateLimits(routeThreadId);
+  const shouldShowWeeklyLimitPill =
+    activeThreadRateLimits?.rateLimits?.primary?.usedPercent !== undefined ||
+    activeThreadRateLimits?.rateLimits?.secondary?.usedPercent !== undefined;
   const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
@@ -1737,7 +1743,13 @@ export default function Sidebar() {
       </SidebarContent>
 
       <SidebarSeparator />
-      <SidebarFooter className="p-2">
+      <SidebarFooter className="gap-0 p-2">
+        {shouldShowWeeklyLimitPill ? (
+          <>
+            <WeeklyLimitPill rateLimits={activeThreadRateLimits} />
+            <SidebarSeparator className="my-1.5" />
+          </>
+        ) : null}
         <SidebarMenu>
           <SidebarMenuItem>
             {isOnSettings ? (

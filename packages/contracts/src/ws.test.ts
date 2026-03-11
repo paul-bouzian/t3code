@@ -95,6 +95,35 @@ it.effect("accepts typed websocket push envelopes with sequence", () =>
   }),
 );
 
+it.effect("accepts typed provider rate-limit push envelopes", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeWsResponse({
+      type: "push",
+      sequence: 2,
+      channel: WS_CHANNELS.providerRateLimitsUpdated,
+      data: {
+        provider: "codex",
+        threadId: "thread-1",
+        rateLimits: {
+          rateLimits: {
+            primary: {
+              usedPercent: 25,
+              windowDurationMins: 300,
+              resetsAt: 1_900_000_000,
+            },
+          },
+        },
+      },
+    });
+
+    if (!("type" in parsed) || parsed.type !== "push") {
+      assert.fail("expected websocket response to decode as a push envelope");
+    }
+
+    assert.strictEqual(parsed.channel, WS_CHANNELS.providerRateLimitsUpdated);
+  }),
+);
+
 it.effect("rejects push envelopes when channel payload does not match the channel schema", () =>
   Effect.gen(function* () {
     const result = yield* Effect.exit(

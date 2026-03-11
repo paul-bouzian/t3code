@@ -150,6 +150,20 @@ describe("wsNativeApi", () => {
       projectName: "t3-code",
       bootstrapProjectId: ProjectId.makeUnsafe("project-1"),
       bootstrapThreadId: ThreadId.makeUnsafe("thread-1"),
+      providerRateLimitsSnapshots: [
+        {
+          provider: "codex",
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          rateLimits: {
+            rateLimits: {
+              primary: {
+                usedPercent: 10,
+                windowDurationMins: 300,
+              },
+            },
+          },
+        },
+      ],
     });
 
     expect(listener).toHaveBeenCalledTimes(1);
@@ -159,6 +173,12 @@ describe("wsNativeApi", () => {
         projectName: "t3-code",
         bootstrapProjectId: "project-1",
         bootstrapThreadId: "thread-1",
+        providerRateLimitsSnapshots: [
+          expect.objectContaining({
+            provider: "codex",
+            threadId: "thread-1",
+          }),
+        ],
       }),
     );
   });
@@ -231,6 +251,48 @@ describe("wsNativeApi", () => {
       issues: [],
       providers: defaultProviders,
     });
+  });
+
+  it("delivers and caches provider.rateLimitsUpdated payloads", async () => {
+    const { createWsNativeApi, onRateLimitsUpdated } = await import("./wsNativeApi");
+
+    createWsNativeApi();
+    const listener = vi.fn();
+    onRateLimitsUpdated(listener);
+
+    const payload = {
+      provider: "codex" as const,
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      rateLimits: {
+        rateLimits: {
+          primary: {
+            usedPercent: 42,
+            windowDurationMins: 300,
+            resetsAt: 1_900_000_000,
+          },
+        },
+      },
+    };
+    emitPush(WS_CHANNELS.providerRateLimitsUpdated, payload);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex",
+        threadId: "thread-1",
+      }),
+    );
+
+    const lateListener = vi.fn();
+    onRateLimitsUpdated(lateListener);
+
+    expect(lateListener).toHaveBeenCalledTimes(1);
+    expect(lateListener).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex",
+        threadId: "thread-1",
+      }),
+    );
   });
 
   it("forwards valid terminal and orchestration events", async () => {
